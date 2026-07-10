@@ -10,9 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
-SETTINGS_DIR = Path(
-    os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
-) / "logioki"
+SETTINGS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "logioki"
 SYSTEMCTL = next(
     (path for path in (Path("/usr/bin/systemctl"), Path("/bin/systemctl")) if path.is_file()),
     Path("/usr/bin/systemctl"),

@@ -140,12 +140,17 @@ def _validate_current_data(data: dict[str, Any]) -> dict[str, Any]:
 def _migrate_legacy_data(data: dict[str, Any]) -> dict[str, Any]:
     # Version 1 stored camera model names directly at the top level. Keep it
     # available until a matching camera is seen, then migrate it to a stable key.
-    migrated = _empty_data()
-    migrated["legacy_cameras"] = {
+    legacy_cameras = {
         key: value
         for key, value in data.items()
         if isinstance(value, dict) and isinstance(value.get("controls"), dict)
     }
+    if len(legacy_cameras) > MAX_CAMERAS:
+        raise ValueError("settings contain too many legacy cameras")
+    for camera_key, entry in legacy_cameras.items():
+        _validate_camera_entry(camera_key, entry)
+    migrated = _empty_data()
+    migrated["legacy_cameras"] = legacy_cameras
     return migrated
 
 
@@ -350,6 +355,9 @@ def _parse_saved_controls(cam, saved_values, result: RestoreResult):
         if ctrl_id not in by_id:
             result.skipped[str(key)] = "control is not exposed by this camera"
             continue
+        if isinstance(value, bool):
+            result.failed[str(key)] = "saved value is not an integer"
+            continue
         try:
             value = int(value)
         except (TypeError, ValueError):
@@ -393,9 +401,17 @@ def apply_to_camera(cam, saved_values: Mapping[str, Any]) -> RestoreResult:
     by_id, items = _parse_saved_controls(cam, saved_values, result)
 
     # Apply auto/manual switches before the values whose active state they gate.
-    cam.refresh_flags()
+    try:
+        cam.refresh_flags()
+    except OSError as exc:
+        result.failed["device"] = getattr(exc, "strerror", None) or str(exc)
+        return result
     _apply_control_pass(cam, by_id, items, (TYPE_BOOL, TYPE_MENU), result)
-    cam.refresh_flags()
+    try:
+        cam.refresh_flags()
+    except OSError as exc:
+        result.failed["device"] = getattr(exc, "strerror", None) or str(exc)
+        return result
     _apply_control_pass(cam, by_id, items, (TYPE_INT,), result)
     return result
 

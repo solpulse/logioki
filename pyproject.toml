@@ -9,17 +9,31 @@ description = "Native Linux control panel for UVC webcams"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
+authors = [{ name = "Logioki Contributors" }]
+keywords = ["camera", "GTK", "KDE", "Linux", "UVC", "webcam"]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: GTK",
+  "Intended Audience :: End Users/Desktop",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Video :: Capture",
 ]
+
+[project.urls]
+Homepage = "https://github.com/solpulse/logioki"
+Issues = "https://github.com/solpulse/logioki/issues"
+Source = "https://github.com/solpulse/logioki"
 
 [project.scripts]
 logioki = "logioki_cli:main"
 
 [tool.setuptools]
 py-modules = ["logioki", "logioki_cli", "preview", "service", "store", "v4l2ctl"]
+include-package-data = false
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "__pycache__/*"]
 
 [tool.setuptools.data-files]
 "share/applications" = ["data/io.github.solpulse.Logioki.desktop"]
@@ -32,3 +46,6 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+docstring-code-format = true

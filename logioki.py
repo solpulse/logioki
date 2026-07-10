@@ -5,7 +5,6 @@ GUI:       python3 logioki.py
 Headless:  python3 logioki.py --apply   (restore saved settings, used at login)
 """
 
-import argparse
 import copy
 import logging
 import os
@@ -16,24 +15,12 @@ from concurrent.futures import ThreadPoolExecutor
 import store
 import v4l2ctl
 
-
-def _argument_parser():
-    parser = argparse.ArgumentParser(description="Control and restore UVC webcam settings")
-    parser.add_argument("--apply", action="store_true", help="restore settings without a GUI")
-    parser.add_argument("--retry", type=int, default=0, metavar="SECONDS")
-    return parser
-
-
-def _run_headless(retry_seconds):
-    matched, result = store.apply_all(retry_seconds=max(0, retry_seconds))
-    return 0 if matched and result.ok else 1
-
-
 # Keep the login service independent of GTK/GStreamer availability while making
 # normal module imports side-effect free.
 if __name__ == "__main__" and "--apply" in sys.argv:
-    _headless_args = _argument_parser().parse_args(sys.argv[1:])
-    sys.exit(_run_headless(_headless_args.retry))
+    from logioki_cli import main as _cli_main
+
+    sys.exit(_cli_main())
 
 
 import gi  # noqa: E402
@@ -252,15 +239,30 @@ class WindowController:
 
     def _on_close(self, _win):
         self._closed = True
-        self._flush_control_writes()
-        self.preview.stop()
-        if self._save_timeout:
-            GLib.source_remove(self._save_timeout)
-            self._save_timeout = 0
-        self._flush_save(wait=True)
-        self._save_executor.shutdown(wait=True, cancel_futures=False)
-        for cam in self.cameras:
-            cam.close()
+        try:
+            self._flush_control_writes()
+            if self._save_timeout:
+                GLib.source_remove(self._save_timeout)
+                self._save_timeout = 0
+            self._flush_save(wait=True)
+        except Exception:
+            # Closing must still release the preview and every device if the
+            # final persistence attempt fails.
+            LOGGER.exception("Could not persist settings while closing")
+        finally:
+            try:
+                self.preview.stop()
+            except Exception:
+                LOGGER.exception("Could not stop the camera preview")
+            try:
+                self._save_executor.shutdown(wait=True, cancel_futures=False)
+            except Exception:
+                LOGGER.exception("Could not stop the settings worker")
+            for cam in self.cameras:
+                try:
+                    cam.close()
+                except OSError:
+                    LOGGER.exception("Could not close camera %s", cam.path)
         return False
 
     # ---------- camera <-> UI sync ----------
@@ -1217,13 +1219,10 @@ class App(ApplicationBase):
 
 
 def main(argv=None):
-    argv = list(sys.argv if argv is None else argv)
-    args, gtk_arguments = _argument_parser().parse_known_args(argv[1:])
-    if args.apply:
-        return _run_headless(args.retry)
-    if args.retry:
-        _argument_parser().error("--retry requires --apply")
-    return App().run([argv[0], *gtk_arguments])
+    # Keep one command-line policy in the dependency-light entry-point module.
+    from logioki_cli import main as cli_main
+
+    return cli_main(sys.argv if argv is None else argv)
 
 
 if __name__ == "__main__":

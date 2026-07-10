@@ -72,6 +72,13 @@ class StoreTests(unittest.TestCase):
         self.assertEqual("Streaming", entry["presets"]["streaming"]["name"])
         self.assertEqual("Video Calls", entry["presets"]["video-calls"]["name"])
 
+    def test_invalid_legacy_settings_are_quarantined(self):
+        with open(store.CONFIG_FILE, "w") as settings:
+            json.dump({"MX Brio": {"controls": {"3": True}}}, settings)
+        with self.assertLogs(store.LOGGER, level="WARNING"):
+            self.assertEqual(store._empty_data(), store.load())
+        self.assertFalse(os.path.exists(store.CONFIG_FILE))
+
     def test_identical_models_keep_separate_entries(self):
         data = store._empty_data()
         first = store.camera_entry(data, FakeCamera(key="usb:046d:0944:A"))
@@ -131,6 +138,20 @@ class StoreTests(unittest.TestCase):
         result = store.apply_to_camera(cam, {"3": 2**31})
         self.assertFalse(cam.set_calls)
         self.assertIn("outside", result.failed["3"])
+
+    def test_restore_reports_device_refresh_failure(self):
+        cam = FakeCamera()
+        cam.refresh_flags = mock.Mock(side_effect=OSError(19, "camera disconnected"))
+        result = store.apply_to_camera(cam, {"3": 70})
+        self.assertFalse(result.ok)
+        self.assertEqual("camera disconnected", result.failed["device"])
+        self.assertFalse(cam.set_calls)
+
+    def test_restore_rejects_boolean_as_an_integer(self):
+        cam = FakeCamera()
+        result = store.apply_to_camera(cam, {"3": True})
+        self.assertEqual("saved value is not an integer", result.failed["3"])
+        self.assertFalse(cam.set_calls)
 
     def test_save_is_atomic_and_round_trips(self):
         data = store._empty_data()

@@ -12,6 +12,14 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(0, logioki_cli.main(["logioki", "--apply", "--retry", "5"]))
         apply_all.assert_called_once_with(retry_seconds=5)
 
+    def test_headless_mode_rejects_gui_arguments(self):
+        with self.assertRaises(SystemExit):
+            logioki_cli.main(["logioki", "--apply", "--display=:1"])
+
+    def test_retry_must_be_non_negative(self):
+        with self.assertRaises(SystemExit):
+            logioki_cli.main(["logioki", "--apply", "--retry=-1"])
+
 
 if __name__ == "__main__":
     unittest.main()

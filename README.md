@@ -59,6 +59,28 @@ Or launch **Logioki** from your desktop's app grid (the user installation places
 - `tests/` — persistence, preset, identity, verification, and service tests
 - `data/` — desktop launcher, AppStream metadata, and scalable application icon
 
+The dependency direction is deliberately one-way: the GTK application orchestrates
+the preview, settings, service, and V4L2 modules; those backend modules do not import
+the interface. The installed CLI also keeps headless restore independent of GTK and
+GStreamer, which allows the login service to run on a minimal user session.
+
+## Development
+
+Run the same fast checks used by continuous integration:
+
+```sh
+python3 -m unittest discover -s tests -v
+python3 -m ruff format --check .
+python3 -m ruff check .
+python3 -m bandit --recursive . --exclude ./.git,./tests \
+  --severity-level medium --confidence-level medium
+desktop-file-validate data/io.github.solpulse.Logioki.desktop
+appstreamcli validate --no-net data/io.github.solpulse.Logioki.metainfo.xml
+```
+
+The complete CI job also constructs both desktop variants under Xvfb using
+`tests/ui_smoke.py`. Quality-tool versions are pinned in `requirements-ci.txt`.
+
 ## Requirements
 
 Python 3, GTK4 + libadwaita + GStreamer via PyGObject — all present on

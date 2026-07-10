@@ -15,6 +15,24 @@ class CameraLifecycleTests(unittest.TestCase):
             v4l2ctl.Camera("/dev/video0")
         close.assert_called_once_with(42)
 
+    def test_closed_camera_rejects_control_operations(self):
+        camera = object.__new__(v4l2ctl.Camera)
+        camera.fd = None
+        with self.assertRaises(OSError) as raised:
+            camera.get(1)
+        self.assertEqual(v4l2ctl.errno.EBADF, raised.exception.errno)
+
+    def test_close_is_idempotent_even_when_os_close_fails(self):
+        camera = object.__new__(v4l2ctl.Camera)
+        camera.fd = 42
+        with (
+            mock.patch.object(v4l2ctl.os, "close", side_effect=OSError(5, "close failed")) as close,
+            self.assertRaises(OSError),
+        ):
+            camera.close()
+        camera.close()
+        close.assert_called_once_with(42)
+
     def test_capabilities_fallback_when_device_caps_flag_is_absent(self):
         def ioctl(_fd, request, structure):
             if request == v4l2ctl.VIDIOC_QUERYCAP:

@@ -8,6 +8,7 @@ import fcntl
 import glob
 import os
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 
 VIDIOC_QUERYCAP = 0x80685600
@@ -138,19 +139,25 @@ class Camera:
             if self.is_capture:
                 self._enumerate()
         except Exception:
-            self.close()
+            with suppress(OSError):
+                self.close()
             raise
 
     def close(self) -> None:
         if self.fd is not None:
-            os.close(self.fd)
-            self.fd = None
+            fd, self.fd = self.fd, None
+            os.close(fd)
 
     def __enter__(self):
         return self
 
     def __exit__(self, _exc_type, _exc, _traceback):
         self.close()
+
+    def _fileno(self) -> int:
+        if self.fd is None:
+            raise OSError(errno.EBADF, "camera is closed")
+        return self.fd
 
     @property
     def key(self) -> str:
@@ -209,7 +216,7 @@ class Camera:
         seen_ids: set[int] = set()
         while len(seen_ids) < MAX_CONTROLS:
             try:
-                fcntl.ioctl(self.fd, VIDIOC_QUERYCTRL, qc)
+                fcntl.ioctl(self._fileno(), VIDIOC_QUERYCTRL, qc)
             except OSError as exc:
                 if exc.errno == errno.EINVAL:
                     break
@@ -233,7 +240,7 @@ class Camera:
                         qm.id = qc.id
                         qm.index = i
                         try:
-                            fcntl.ioctl(self.fd, VIDIOC_QUERYMENU, qm)
+                            fcntl.ioctl(self._fileno(), VIDIOC_QUERYMENU, qm)
                             label = (
                                 str(qm.value) if qc.type == TYPE_INTEGER_MENU else _decode(qm.name)
                             )
@@ -249,14 +256,14 @@ class Camera:
     def get(self, ctrl_id: int) -> int:
         c = _control()
         c.id = ctrl_id
-        fcntl.ioctl(self.fd, VIDIOC_G_CTRL, c)
+        fcntl.ioctl(self._fileno(), VIDIOC_G_CTRL, c)
         return c.value
 
     def set(self, ctrl_id: int, value: int) -> None:
         c = _control()
         c.id = ctrl_id
         c.value = value
-        fcntl.ioctl(self.fd, VIDIOC_S_CTRL, c)
+        fcntl.ioctl(self._fileno(), VIDIOC_S_CTRL, c)
 
     def refresh_flags(self) -> None:
         """Re-query INACTIVE flags (e.g. WB temperature gated by auto WB)."""
@@ -264,7 +271,7 @@ class Camera:
         for ctrl in self.controls:
             qc.id = ctrl.id
             try:
-                fcntl.ioctl(self.fd, VIDIOC_QUERYCTRL, qc)
+                fcntl.ioctl(self._fileno(), VIDIOC_QUERYCTRL, qc)
                 ctrl.inactive = bool(qc.flags & V4L2_CTRL_FLAG_INACTIVE)
                 ctrl.read_only = bool(qc.flags & V4L2_CTRL_FLAG_READ_ONLY)
             except OSError:
