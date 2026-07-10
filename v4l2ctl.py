@@ -32,6 +32,9 @@ TYPE_MENU = 3
 TYPE_CLASS = 6
 TYPE_INTEGER_MENU = 9
 
+MAX_CONTROLS = 1024
+MAX_MENU_ITEMS = 1024
+
 
 class _queryctrl(ctypes.Structure):
     _fields_ = [
@@ -203,13 +206,17 @@ class Camera:
         qc = _queryctrl()
         qc.id = V4L2_CTRL_FLAG_NEXT_CTRL | V4L2_CTRL_FLAG_NEXT_COMPOUND
         group = "Controls"
-        while True:
+        seen_ids: set[int] = set()
+        while len(seen_ids) < MAX_CONTROLS:
             try:
                 fcntl.ioctl(self.fd, VIDIOC_QUERYCTRL, qc)
             except OSError as exc:
                 if exc.errno == errno.EINVAL:
                     break
                 raise
+            if qc.id in seen_ids:
+                break
+            seen_ids.add(qc.id)
             if qc.type == TYPE_CLASS:
                 group = _decode(qc.name)
             elif not qc.flags & V4L2_CTRL_FLAG_DISABLED and qc.type in (
@@ -220,7 +227,8 @@ class Camera:
             ):
                 menu_items = []
                 if qc.type in (TYPE_MENU, TYPE_INTEGER_MENU):
-                    for i in range(qc.minimum, qc.maximum + 1):
+                    menu_end = min(qc.maximum, qc.minimum + MAX_MENU_ITEMS - 1)
+                    for i in range(qc.minimum, menu_end + 1):
                         qm = _querymenu()
                         qm.id = qc.id
                         qm.index = i

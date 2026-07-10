@@ -34,6 +34,27 @@ class CameraLifecycleTests(unittest.TestCase):
             self.assertTrue(camera.is_capture)
             camera.close()
 
+    def test_control_enumeration_stops_if_driver_repeats_an_identifier(self):
+        camera = object.__new__(v4l2ctl.Camera)
+        camera.fd = 42
+        camera.controls = []
+        camera.groups = {}
+
+        def ioctl(_fd, request, structure):
+            self.assertEqual(v4l2ctl.VIDIOC_QUERYCTRL, request)
+            structure.id = 123
+            structure.type = v4l2ctl.TYPE_INT
+            structure.name = b"Brightness"
+            structure.minimum = 0
+            structure.maximum = 100
+            structure.step = 1
+            return 0
+
+        with mock.patch.object(v4l2ctl.fcntl, "ioctl", side_effect=ioctl) as mocked_ioctl:
+            camera._enumerate()
+        self.assertEqual(2, mocked_ioctl.call_count)
+        self.assertEqual(1, len(camera.controls))
+
 
 if __name__ == "__main__":
     unittest.main()

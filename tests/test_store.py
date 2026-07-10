@@ -15,10 +15,18 @@ class FakeCamera:
         self.card = card
         self.path = path
         self.controls = [
-            SimpleNamespace(id=1, type=2, default=1, inactive=False, read_only=False),
-            SimpleNamespace(id=2, type=3, default=3, inactive=False, read_only=False),
-            SimpleNamespace(id=3, type=1, default=30, inactive=False, read_only=False),
-            SimpleNamespace(id=4, type=1, default=40, inactive=False, read_only=True),
+            SimpleNamespace(
+                id=1, type=2, minimum=0, maximum=1, default=1, inactive=False, read_only=False
+            ),
+            SimpleNamespace(
+                id=2, type=3, minimum=0, maximum=10, default=3, inactive=False, read_only=False
+            ),
+            SimpleNamespace(
+                id=3, type=1, minimum=0, maximum=100, default=30, inactive=False, read_only=False
+            ),
+            SimpleNamespace(
+                id=4, type=1, minimum=0, maximum=100, default=40, inactive=False, read_only=True
+            ),
         ]
         self.values = {1: 0, 2: 3, 3: 33, 4: 40}
         self.set_calls = []
@@ -118,6 +126,12 @@ class StoreTests(unittest.TestCase):
             aggregate.applied,
         )
 
+    def test_restore_rejects_value_outside_camera_range(self):
+        cam = FakeCamera()
+        result = store.apply_to_camera(cam, {"3": 2**31})
+        self.assertFalse(cam.set_calls)
+        self.assertIn("outside", result.failed["3"])
+
     def test_save_is_atomic_and_round_trips(self):
         data = store._empty_data()
         store.save(data)
@@ -138,6 +152,28 @@ class StoreTests(unittest.TestCase):
         with self.assertLogs(store.LOGGER, level="WARNING"):
             self.assertEqual(store._empty_data(), store.load())
         self.assertFalse(os.path.exists(store.CONFIG_FILE))
+
+    def test_oversized_settings_are_quarantined_without_parsing(self):
+        with open(store.CONFIG_FILE, "wb") as settings:
+            settings.write(b" " * (store.MAX_SETTINGS_BYTES + 1))
+        with self.assertLogs(store.LOGGER, level="WARNING"):
+            self.assertEqual(store._empty_data(), store.load())
+        self.assertFalse(os.path.exists(store.CONFIG_FILE))
+
+    def test_save_restricts_configuration_permissions(self):
+        os.chmod(self.temp.name, 0o755)
+        store.save(store._empty_data())
+        self.assertEqual(0o700, os.stat(self.temp.name).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(store.CONFIG_FILE).st_mode & 0o777)
+
+    def test_excessive_control_count_is_rejected(self):
+        data = store._empty_data()
+        data["cameras"]["camera"] = {
+            "controls": {str(index): index for index in range(store.MAX_CONTROLS_PER_SET + 1)},
+            "presets": {},
+        }
+        with self.assertRaises(ValueError):
+            store.save(data)
 
     def test_apply_all_retries_a_failed_camera_restore(self):
         failed_cam = FakeCamera()

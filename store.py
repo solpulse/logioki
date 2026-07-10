@@ -25,6 +25,13 @@ CONFIG_DIR = os.path.join(
 )
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 SCHEMA_VERSION = 2
+MAX_SETTINGS_BYTES = 1024 * 1024
+MAX_CAMERAS = 64
+MAX_PRESETS_PER_CAMERA = 128
+MAX_CONTROLS_PER_SET = 1024
+MAX_TEXT_LENGTH = 512
+MIN_CONTROL_VALUE = -(2**31)
+MAX_CONTROL_VALUE = 2**31 - 1
 
 BUILTIN_PRESETS = (
     ("default", "Default"),
@@ -68,23 +75,48 @@ def _quarantine_corrupt_config(path: Path) -> None:
         LOGGER.exception("Could not preserve corrupt settings file %s", path)
 
 
+def _validate_text(value: Any, description: str) -> None:
+    if not isinstance(value, str) or len(value) > MAX_TEXT_LENGTH:
+        raise ValueError(f"{description} must be text no longer than {MAX_TEXT_LENGTH} characters")
+
+
+def _validate_controls(controls: Any, description: str) -> None:
+    if not isinstance(controls, dict):
+        raise ValueError(f"{description} must be an object")
+    if len(controls) > MAX_CONTROLS_PER_SET:
+        raise ValueError(f"{description} contains too many controls")
+    for control_id, value in controls.items():
+        _validate_text(control_id, f"control identifier in {description}")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not MIN_CONTROL_VALUE <= value <= MAX_CONTROL_VALUE
+        ):
+            raise ValueError(f"control {control_id} in {description} must be a 32-bit integer")
+
+
 def _validate_preset(camera_key: str, preset_id: Any, preset: Any) -> None:
     if not isinstance(preset_id, str) or not isinstance(preset, dict):
         raise ValueError(f"invalid preset in {camera_key}")
-    if not isinstance(preset.get("controls", {}), dict):
-        raise ValueError(f"preset controls for {camera_key}/{preset_id} must be an object")
-    if "name" in preset and not isinstance(preset["name"], str):
-        raise ValueError(f"preset name for {camera_key}/{preset_id} must be text")
+    _validate_text(preset_id, f"preset identifier in {camera_key}")
+    _validate_controls(preset.get("controls", {}), f"preset controls for {camera_key}/{preset_id}")
+    if "name" in preset:
+        _validate_text(preset["name"], f"preset name for {camera_key}/{preset_id}")
 
 
 def _validate_camera_entry(camera_key: Any, entry: Any) -> None:
     if not isinstance(camera_key, str) or not isinstance(entry, dict):
         raise ValueError("camera entries must be objects with string keys")
-    if not isinstance(entry.get("controls", {}), dict):
-        raise ValueError(f"controls for {camera_key} must be an object")
+    _validate_text(camera_key, "camera identifier")
+    _validate_controls(entry.get("controls", {}), f"controls for {camera_key}")
+    for field_name in ("name", "device", "selected_preset"):
+        if field_name in entry:
+            _validate_text(entry[field_name], f"{field_name} for {camera_key}")
     presets = entry.get("presets", {})
     if not isinstance(presets, dict):
         raise ValueError(f"presets for {camera_key} must be an object")
+    if len(presets) > MAX_PRESETS_PER_CAMERA:
+        raise ValueError(f"too many presets for {camera_key}")
     for preset_id, preset in presets.items():
         _validate_preset(camera_key, preset_id, preset)
 
@@ -93,6 +125,8 @@ def _validate_current_data(data: dict[str, Any]) -> dict[str, Any]:
     cameras = data.get("cameras")
     if not isinstance(cameras, dict):
         raise ValueError("settings cameras must be an object")
+    if len(cameras) > MAX_CAMERAS:
+        raise ValueError("settings contain too many cameras")
     if not isinstance(data.get("app"), dict):
         data["app"] = {}
     if not isinstance(data["app"].get("auto_restore", False), bool):
@@ -131,12 +165,15 @@ def _normalize_data(data: Any) -> dict[str, Any]:
 def load() -> dict[str, Any]:
     path = Path(CONFIG_FILE)
     try:
-        with path.open(encoding="utf-8") as f:
-            data = json.load(f)
+        with path.open("rb") as settings:
+            payload = settings.read(MAX_SETTINGS_BYTES + 1)
+        if len(payload) > MAX_SETTINGS_BYTES:
+            raise ValueError(f"settings file exceeds {MAX_SETTINGS_BYTES} bytes")
+        data = json.loads(payload.decode("utf-8"))
     except FileNotFoundError:
         return _empty_data()
-    except json.JSONDecodeError:
-        LOGGER.warning("Settings file is not valid JSON and will be preserved: %s", path)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError):
+        LOGGER.warning("Settings file cannot be safely read and will be preserved: %s", path)
         _quarantine_corrupt_config(path)
         return _empty_data()
     except OSError:
@@ -154,7 +191,9 @@ def load() -> dict[str, Any]:
 def save(data: dict[str, Any]) -> None:
     directory = Path(CONFIG_DIR)
     target = Path(CONFIG_FILE)
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    _validate_current_data(data)
     temporary_name = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -170,6 +209,8 @@ def save(data: dict[str, Any]) -> None:
             json.dump(data, temporary, indent=2, sort_keys=True)
             temporary.write("\n")
             temporary.flush()
+            if temporary.tell() > MAX_SETTINGS_BYTES:
+                raise ValueError(f"settings file exceeds {MAX_SETTINGS_BYTES} bytes")
             os.fsync(temporary.fileno())
         os.replace(temporary_name, target)
         temporary_name = None
@@ -268,6 +309,8 @@ def create_preset(entry: dict[str, Any], name: str, controls: Mapping[str, int])
     name = " ".join(name.split()).strip()
     if not name:
         raise ValueError("Preset name cannot be empty")
+    if len(name) > MAX_TEXT_LENGTH:
+        raise ValueError(f"Preset name cannot exceed {MAX_TEXT_LENGTH} characters")
     preset_id = unique_preset_id(entry, name)
     entry.setdefault("presets", {})[preset_id] = {
         "name": name,
@@ -312,6 +355,10 @@ def _parse_saved_controls(cam, saved_values, result: RestoreResult):
         except (TypeError, ValueError):
             result.failed[str(key)] = "saved value is not an integer"
             continue
+        ctrl = by_id[ctrl_id]
+        if not ctrl.minimum <= value <= ctrl.maximum:
+            result.failed[str(key)] = "saved value is outside the camera's supported range"
+            continue
         items.append((ctrl_id, value))
     return by_id, items
 
@@ -331,8 +378,8 @@ def _apply_control_pass(cam, by_id, items, allowed_types, result: RestoreResult)
         try:
             cam.set(ctrl_id, value)
             actual = cam.get(ctrl_id)
-        except OSError as exc:
-            result.failed[key] = exc.strerror or str(exc)
+        except (OSError, OverflowError, TypeError) as exc:
+            result.failed[key] = getattr(exc, "strerror", None) or str(exc)
             continue
         if actual != value:
             result.failed[key] = f"requested {value}, camera reports {actual}"

@@ -10,6 +10,13 @@ from contextlib import suppress
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
+SETTINGS_DIR = Path(
+    os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+) / "logioki"
+SYSTEMCTL = next(
+    (path for path in (Path("/usr/bin/systemctl"), Path("/bin/systemctl")) if path.is_file()),
+    Path("/usr/bin/systemctl"),
+)
 SYSTEMD_UNIT = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
     / "systemd"
@@ -43,6 +50,33 @@ After=graphical-session.target
 [Service]
 Type=oneshot
 ExecStart={command}
+AmbientCapabilities=
+CapabilityBoundingSet=
+KeyringMode=private
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProcSubset=pid
+ProtectProc=invisible
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=-{_systemd_quote(str(SETTINGS_DIR))}
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallErrorNumber=EPERM
+SystemCallFilter=~@clock @cpu-emulation @debug @module @mount @obsolete @raw-io @reboot @swap
+UMask=0077
 
 [Install]
 WantedBy=default.target
@@ -51,7 +85,7 @@ WantedBy=default.target
 
 def _systemctl(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["systemctl", "--user", *arguments],
+        [str(SYSTEMCTL), "--user", *arguments],
         check=check,
         capture_output=True,
         text=True,
