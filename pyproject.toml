@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,7 @@ name = "logioki"
 version = "0.1.0"
 description = "Native Linux control panel for UVC webcams"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.10"
 classifiers = [
   "Development Status :: 3 - Alpha",

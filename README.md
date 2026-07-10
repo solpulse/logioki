@@ -81,3 +81,7 @@ Default always remains the camera-reported factory defaults. **New…** creates 
 custom preset from the current image, and the trash button deletes custom
 presets. The last live camera state is restored at startup independently of
 which named preset was last edited.
+
+## License
+
+Logioki is licensed under the Apache License 2.0. See `LICENSE`.
