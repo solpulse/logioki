@@ -67,14 +67,19 @@ class StoreTests(unittest.TestCase):
     def test_identical_models_keep_separate_entries(self):
         data = store._empty_data()
         first = store.camera_entry(data, FakeCamera(key="usb:046d:0944:A"))
-        second = store.camera_entry(
-            data, FakeCamera(key="usb:046d:0944:B", path="/dev/video2")
-        )
+        second = store.camera_entry(data, FakeCamera(key="usb:046d:0944:B", path="/dev/video2"))
         first["controls"]["3"] = 10
         second["controls"]["3"] = 90
         self.assertEqual(2, len(data["cameras"]))
         self.assertEqual(10, data["cameras"]["usb:046d:0944:A"]["controls"]["3"])
         self.assertEqual(90, data["cameras"]["usb:046d:0944:B"]["controls"]["3"])
+
+    def test_existing_camera_entry_does_not_reread_controls(self):
+        cam = FakeCamera()
+        data = store._empty_data()
+        entry = store.camera_entry(data, cam)
+        with mock.patch.object(cam, "get", side_effect=AssertionError("unexpected reread")):
+            self.assertIs(entry, store.camera_entry(data, cam))
 
     def test_presets_create_update_delete_and_protect_builtins(self):
         entry = store.camera_entry(store._empty_data(), FakeCamera())
@@ -102,11 +107,37 @@ class StoreTests(unittest.TestCase):
         self.assertIn("camera reports", result.failed["3"])
         self.assertEqual("control is read-only", result.skipped["4"])
 
+    def test_restore_result_merge_namespaces_multiple_cameras(self):
+        first = store.RestoreResult(applied={"3": 10})
+        second = store.RestoreResult(applied={"3": 90})
+        aggregate = store.RestoreResult()
+        aggregate.merge(first, prefix="camera-a")
+        aggregate.merge(second, prefix="camera-b")
+        self.assertEqual(
+            {"camera-a:3": 10, "camera-b:3": 90},
+            aggregate.applied,
+        )
+
     def test_save_is_atomic_and_round_trips(self):
         data = store._empty_data()
         store.save(data)
         self.assertEqual(data, store.load())
         self.assertFalse(os.path.exists(store.CONFIG_FILE + ".tmp"))
+
+    def test_corrupt_settings_are_quarantined(self):
+        with open(store.CONFIG_FILE, "w", encoding="utf-8") as settings:
+            settings.write("{not-json")
+        with self.assertLogs(store.LOGGER, level="WARNING"):
+            self.assertEqual(store._empty_data(), store.load())
+        self.assertFalse(os.path.exists(store.CONFIG_FILE))
+        self.assertEqual(1, len(os.listdir(self.temp.name)))
+
+    def test_invalid_nested_schema_is_quarantined(self):
+        with open(store.CONFIG_FILE, "w", encoding="utf-8") as settings:
+            json.dump({"version": 2, "app": {}, "cameras": {"camera": []}}, settings)
+        with self.assertLogs(store.LOGGER, level="WARNING"):
+            self.assertEqual(store._empty_data(), store.load())
+        self.assertFalse(os.path.exists(store.CONFIG_FILE))
 
     def test_apply_all_retries_a_failed_camera_restore(self):
         failed_cam = FakeCamera()
@@ -116,9 +147,10 @@ class StoreTests(unittest.TestCase):
         entry = store.camera_entry(data, recovered_cam)
         entry["controls"] = {"3": 77}
         store.save(data)
-        with mock.patch(
-            "v4l2ctl.list_cameras", side_effect=[[failed_cam], [recovered_cam]]
-        ), mock.patch.object(store.time, "sleep"):
+        with (
+            mock.patch("v4l2ctl.list_cameras", side_effect=[[failed_cam], [recovered_cam]]),
+            mock.patch.object(store.time, "sleep"),
+        ):
             matched, result = store.apply_all(quiet=True, retry_seconds=10)
         self.assertEqual(1, matched)
         self.assertTrue(result.ok)

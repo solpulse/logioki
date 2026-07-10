@@ -6,9 +6,9 @@ settings that survive reboots.
 
 UVC webcams forget all settings on power loss. Logioki saves every change to
 `~/.config/logioki/settings.json` and re-applies it to the camera each time
-the app opens. Automatic login restore is enabled by default; its systemd user
-service waits up to 30 seconds for the camera, then restores settings without
-opening the GUI. It can be disabled with **Apply at login**.
+the app opens. Optional login restore can be enabled with **Apply at login**;
+its systemd user service waits up to 30 seconds for the camera, then restores
+settings without opening the GUI.
 
 ## Run
 
@@ -16,15 +16,22 @@ opening the GUI. It can be disabled with **Apply at login**.
 python3 logioki.py
 ```
 
-Or launch **Logioki** from your desktop's app grid (installed via
-`~/.local/share/applications/logioki.desktop`).
+For a user installation from a source checkout:
+
+```sh
+python3 -m pip install --user .
+logioki
+```
+
+Or launch **Logioki** from your desktop's app grid (the user installation places
+`io.github.solpulse.Logioki.desktop` in your local applications directory).
 
 ## Features
 
 - Live 720p preview while you tune
 - Automatically uses a GNOME/libadwaita interface on GNOME and a polished
-  Plasma-oriented two-pane interface on KDE, with a large preview and tabbed
-  settings inspector (`LOGIOKI_DESKTOP_STYLE=kde|gnome` can override it)
+  Plasma-oriented two-pane interface on KDE, with a large preview and compact
+  responsive settings inspector (`LOGIOKI_DESKTOP_STYLE=kde|gnome` can override it)
 - All controls the camera exposes, discovered at runtime: brightness,
   contrast, saturation, sharpness, white balance (auto + temperature),
   exposure (auto/manual + time), gain, backlight compensation, focus
@@ -44,14 +51,19 @@ Or launch **Logioki** from your desktop's app grid (installed via
 
 - `logioki.py` — GTK4/libadwaita app; `--apply` flag restores settings
   headlessly (used by the login service)
+- `logioki_cli.py` — dependency-light installed command-line entry point
+- `preview.py` — bounded GStreamer preview and error handling
+- `service.py` — atomic systemd user-service management
 - `v4l2ctl.py` — v4l2 control backend (raw ioctls, no dependencies)
 - `store.py` — settings persistence and restore logic
 - `tests/` — persistence, preset, identity, verification, and service tests
+- `data/` — desktop launcher, AppStream metadata, and scalable application icon
 
 ## Requirements
 
 Python 3, GTK4 + libadwaita + GStreamer via PyGObject — all present on
-stock Fedora Workstation. No pip packages, no root.
+stock Fedora Workstation. No third-party Python packages are required at
+runtime, and the application does not need root access.
 
 ## Notes
 

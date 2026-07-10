@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            appstream desktop-file-utils gir1.2-adw-1 gir1.2-gst-plugins-base-1.0 \
+            gir1.2-gstreamer-1.0 gir1.2-gtk-4.0 gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good python3-gi xauth xvfb
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Validate desktop metadata
+        run: |
+          desktop-file-validate data/io.github.solpulse.Logioki.desktop
+          appstreamcli validate --no-net data/io.github.solpulse.Logioki.metainfo.xml
+      - name: Smoke-test GNOME interface
+        run: xvfb-run -a env LOGIOKI_DESKTOP_STYLE=gnome python3 tests/ui_smoke.py
+      - name: Smoke-test KDE interface
+        run: xvfb-run -a env LOGIOKI_DESKTOP_STYLE=kde python3 tests/ui_smoke.py

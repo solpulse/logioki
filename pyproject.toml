@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logioki"
+version = "0.1.0"
+description = "Native Linux control panel for UVC webcams"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+logioki = "logioki_cli:main"
+
+[tool.setuptools]
+py-modules = ["logioki", "logioki_cli", "preview", "service", "store", "v4l2ctl"]
+
+[tool.setuptools.data-files]
+"share/applications" = ["data/io.github.solpulse.Logioki.desktop"]
+"share/metainfo" = ["data/io.github.solpulse.Logioki.metainfo.xml"]
+"share/icons/hicolor/scalable/apps" = ["data/io.github.solpulse.Logioki.svg"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Logioki
+Comment=Control UVC webcam image settings
+Exec=logioki
+Icon=io.github.solpulse.Logioki
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;
+Keywords=webcam;camera;UVC;Logitech;
+StartupNotify=true
+DBusActivatable=false

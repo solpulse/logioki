@@ -1,6 +1,11 @@
 """Construct the complete GTK window with a fake camera on a virtual display."""
+
 import os
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import logioki
 
@@ -14,19 +19,39 @@ class FakeCamera:
     def __init__(self):
         self.controls = [
             SimpleNamespace(
-                id=1, name="Brightness", type=logioki.v4l2ctl.TYPE_INT,
-                minimum=0, maximum=255, step=1, default=128,
-                inactive=False, read_only=False, menu_items=[],
+                id=1,
+                name="Brightness",
+                type=logioki.v4l2ctl.TYPE_INT,
+                minimum=0,
+                maximum=255,
+                step=1,
+                default=128,
+                inactive=False,
+                read_only=False,
+                menu_items=[],
             ),
             SimpleNamespace(
-                id=2, name="Auto Focus", type=logioki.v4l2ctl.TYPE_BOOL,
-                minimum=0, maximum=1, step=1, default=1,
-                inactive=False, read_only=False, menu_items=[],
+                id=2,
+                name="Auto Focus",
+                type=logioki.v4l2ctl.TYPE_BOOL,
+                minimum=0,
+                maximum=1,
+                step=1,
+                default=1,
+                inactive=False,
+                read_only=False,
+                menu_items=[],
             ),
             SimpleNamespace(
-                id=3, name="Power Line Frequency", type=logioki.v4l2ctl.TYPE_MENU,
-                minimum=0, maximum=2, step=1, default=1,
-                inactive=False, read_only=False,
+                id=3,
+                name="Power Line Frequency",
+                type=logioki.v4l2ctl.TYPE_MENU,
+                minimum=0,
+                maximum=2,
+                step=1,
+                default=1,
+                inactive=False,
+                read_only=False,
                 menu_items=[(0, "Disabled"), (1, "50 Hz"), (2, "60 Hz")],
             ),
         ]
@@ -48,9 +73,7 @@ class FakeCamera:
 
 fake = FakeCamera()
 logioki.v4l2ctl.list_cameras = lambda: [fake]
-logioki.store.load = lambda: {
-    "version": 2, "app": {"auto_restore": False}, "cameras": {}
-}
+logioki.store.load = lambda: {"version": 2, "app": {"auto_restore": False}, "cameras": {}}
 logioki.store.save = lambda _data: None
 logioki.Preview.start = lambda _self, _path: None
 
@@ -69,10 +92,15 @@ def verify_window():
             and hasattr(window, "delete_preset_button")
         )
         if os.environ.get("LOGIOKI_DESKTOP_STYLE") == "kde":
-            verified["ok"] = verified["ok"] and all(
-                window.settings_stack.get_child_by_name(name) is not None
-                for name in ("presets", "image", "camera", "startup")
-            ) and window.camera_title.get_text() == "MX Brio"
+            verified["ok"] = (
+                verified["ok"]
+                and all(
+                    window.settings_stack.get_child_by_name(name) is not None
+                    for name in ("presets", "image", "camera", "startup")
+                )
+                and window.camera_title.get_text() == "MX Brio"
+                and hasattr(window, "page_picker")
+            )
     app.quit()
     return logioki.GLib.SOURCE_REMOVE
 

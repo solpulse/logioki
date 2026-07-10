@@ -4,30 +4,43 @@
 GUI:       python3 logioki.py
 Headless:  python3 logioki.py --apply   (restore saved settings, used at login)
 """
+
+import argparse
+import copy
+import logging
 import os
-import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import store
 import v4l2ctl
 
-if "--apply" in sys.argv:
-    retry_seconds = 0
-    for arg in sys.argv:
-        if arg.startswith("--retry="):
-            try:
-                retry_seconds = int(arg.split("=", 1)[1])
-            except ValueError:
-                pass
-    matched, result = store.apply_all(retry_seconds=retry_seconds)
-    sys.exit(0 if matched and result.ok else 1)
 
-import gi
+def _argument_parser():
+    parser = argparse.ArgumentParser(description="Control and restore UVC webcam settings")
+    parser.add_argument("--apply", action="store_true", help="restore settings without a GUI")
+    parser.add_argument("--retry", type=int, default=0, metavar="SECONDS")
+    return parser
+
+
+def _run_headless(retry_seconds):
+    matched, result = store.apply_all(retry_seconds=max(0, retry_seconds))
+    return 0 if matched and result.ok else 1
+
+
+# Keep the login service independent of GTK/GStreamer availability while making
+# normal module imports side-effect free.
+if __name__ == "__main__" and "--apply" in sys.argv:
+    _headless_args = _argument_parser().parse_args(sys.argv[1:])
+    sys.exit(_run_headless(_headless_args.retry))
+
+
+import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-gi.require_version("Gst", "1.0")
-from gi.repository import Gdk, Gio, GLib, Gst, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 try:
     gi.require_version("Adw", "1")
@@ -35,68 +48,15 @@ try:
 except (ImportError, ValueError):
     Adw = None
 
-Gst.init(None)
+import service  # noqa: E402
+from preview import Preview  # noqa: E402
 
 APP_ID = "io.github.solpulse.Logioki"
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-SYSTEMD_UNIT = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
-    "systemd", "user", "logioki-restore.service",
-)
+LOGGER = logging.getLogger(__name__)
 
 
-def _systemd_quote(value):
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def install_restore_service():
-    """Install and persistently enable the per-user login restore service."""
-    os.makedirs(os.path.dirname(SYSTEMD_UNIT), exist_ok=True)
-    command = " ".join((
-        _systemd_quote(sys.executable),
-        _systemd_quote(os.path.join(APP_DIR, "logioki.py")),
-        "--apply --retry=30",
-    ))
-    unit = f"""[Unit]
-Description=Logioki: restore webcam settings
-After=graphical-session.target
-
-[Service]
-Type=oneshot
-ExecStart={command}
-
-[Install]
-WantedBy=default.target
-"""
-    try:
-        with open(SYSTEMD_UNIT, "w") as f:
-            f.write(unit)
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-        subprocess.run(
-            ["systemctl", "--user", "enable", "logioki-restore.service"],
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        return False, str(exc)
-    return True, None
-
-
-def remove_restore_service():
-    try:
-        subprocess.run(
-            ["systemctl", "--user", "disable", "logioki-restore.service"],
-            check=False,
-        )
-        try:
-            os.remove(SYSTEMD_UNIT)
-        except FileNotFoundError:
-            pass
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    except OSError as exc:
-        return False, str(exc)
-    return True, None
-
-PREVIEW_WIDTH, PREVIEW_HEIGHT = 1280, 720
+def _set_accessible_label(widget, label):
+    widget.update_property([Gtk.AccessibleProperty.LABEL], [label])
 
 
 def camera_labels(cameras):
@@ -177,7 +137,6 @@ def install_kde_css():
     .kde-hint { color: alpha(@theme_fg_color, 0.66); font-size: 0.88em; }
 
     .kde-inspector {
-        min-width: 390px;
         border-left: 1px solid @borders;
         background: alpha(@theme_base_color, 0.38);
     }
@@ -242,72 +201,20 @@ def install_kde_css():
     )
 
 
-class Preview(Gtk.Picture):
-    """Live camera preview via GStreamer appsink -> Gdk.MemoryTexture."""
-
-    def __init__(self):
-        super().__init__()
-        self.set_content_fit(Gtk.ContentFit.CONTAIN)
-        self.add_css_class("card")
-        self.pipeline = None
-        self._pending = False
-
-    def start(self, device_path):
-        self.stop()
-        desc = (
-            f"v4l2src device={device_path} ! "
-            f"image/jpeg,width={PREVIEW_WIDTH},height={PREVIEW_HEIGHT} ! "
-            f"jpegdec ! videoconvert ! "
-            f"video/x-raw,format=RGB ! "
-            f"appsink name=sink max-buffers=1 drop=true emit-signals=true"
-        )
-        try:
-            self.pipeline = Gst.parse_launch(desc)
-        except GLib.Error:
-            return
-        sink = self.pipeline.get_by_name("sink")
-        sink.connect("new-sample", self._on_sample)
-        self.pipeline.set_state(Gst.State.PLAYING)
-
-    def stop(self):
-        if self.pipeline:
-            self.pipeline.set_state(Gst.State.NULL)
-            self.pipeline = None
-
-    def _on_sample(self, sink):
-        sample = sink.emit("pull-sample")
-        if sample is None or self._pending:
-            return Gst.FlowReturn.OK
-        buf = sample.get_buffer()
-        caps = sample.get_caps().get_structure(0)
-        w, h = caps.get_value("width"), caps.get_value("height")
-        ok, mapinfo = buf.map(Gst.MapFlags.READ)
-        if not ok:
-            return Gst.FlowReturn.OK
-        data = bytes(mapinfo.data)
-        buf.unmap(mapinfo)
-        self._pending = True
-        GLib.idle_add(self._show_frame, data, w, h)
-        return Gst.FlowReturn.OK
-
-    def _show_frame(self, data, w, h):
-        texture = Gdk.MemoryTexture.new(
-            w, h, Gdk.MemoryFormat.R8G8B8, GLib.Bytes.new(data), w * 3
-        )
-        self.set_paintable(texture)
-        self._pending = False
-        return GLib.SOURCE_REMOVE
-
-
 class WindowController:
     def _init_controller(self):
         self.settings = store.load()
         self.cameras = v4l2ctl.list_cameras()
         self.camera = None
         self.camera_settings = None
-        self.rows = {}            # ctrl_id -> (row, value_widget)
-        self._updating = False    # guard against feedback loops
+        self.rows = {}  # ctrl_id -> (row, value_widget)
+        self._updating = False  # guard against feedback loops
         self._save_timeout = 0
+        self._control_timeout = 0
+        self._pending_controls = {}
+        self._save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="logioki-save")
+        self._service_busy = False
+        self._closed = False
         self._preset_ids = []
 
     def _select_initial_camera(self):
@@ -316,12 +223,13 @@ class WindowController:
             self._select_camera(self.cameras[0])
         else:
             self._show_no_camera()
-        if self.settings.setdefault("app", {}).get("auto_restore", True):
+        if self.settings.setdefault("app", {}).get("auto_restore", False):
             GLib.idle_add(self._ensure_autostart)
 
     # ---------- camera lifecycle ----------
 
     def _select_camera(self, cam):
+        self._flush_control_writes()
         self.preview.stop()
         self.camera = cam
         if hasattr(self, "camera_title"):
@@ -338,42 +246,56 @@ class WindowController:
         self.preview.start(cam.path)
 
     def _on_device_changed(self, combo, _pspec):
-        self._select_camera(self.cameras[combo.get_selected()])
+        position = combo.get_selected()
+        if 0 <= position < len(self.cameras):
+            self._select_camera(self.cameras[position])
 
     def _on_close(self, _win):
+        self._closed = True
+        self._flush_control_writes()
         self.preview.stop()
-        self._flush_save()
+        if self._save_timeout:
+            GLib.source_remove(self._save_timeout)
+            self._save_timeout = 0
+        self._flush_save(wait=True)
+        self._save_executor.shutdown(wait=True, cancel_futures=False)
         for cam in self.cameras:
             cam.close()
         return False
 
     # ---------- camera <-> UI sync ----------
 
-    def _sync_from_camera(self):
+    def _sync_from_camera(self, values=None):
         """Read current values + inactive flags from the device into the UI."""
         self._updating = True
-        cam = self.camera
-        cam.refresh_flags()
-        for ctrl in cam.controls:
-            row, widget = self.rows.get(ctrl.id, (None, None))
-            if row is None:
-                continue
-            try:
-                value = cam.get(ctrl.id)
-            except OSError:
-                row.set_sensitive(False)
-                continue
-            if ctrl.type == v4l2ctl.TYPE_BOOL:
-                widget.set_active(bool(value))
-            elif ctrl.type == v4l2ctl.TYPE_MENU:
-                for pos, (idx, _label) in enumerate(ctrl.menu_items):
-                    if idx == value:
-                        widget.set_selected(pos)
-                        break
-            else:
-                widget.set_value(value)
-            row.set_sensitive(not ctrl.inactive and not ctrl.read_only)
-        self._updating = False
+        try:
+            cam = self.camera
+            cam.refresh_flags()
+            for ctrl in cam.controls:
+                row, widget = self.rows.get(ctrl.id, (None, None))
+                if row is None:
+                    continue
+                try:
+                    value = (
+                        values[str(ctrl.id)]
+                        if values is not None and str(ctrl.id) in values
+                        else cam.get(ctrl.id)
+                    )
+                except (KeyError, OSError):
+                    row.set_sensitive(False)
+                    continue
+                if ctrl.type == v4l2ctl.TYPE_BOOL:
+                    widget.set_active(bool(value))
+                elif ctrl.type == v4l2ctl.TYPE_MENU:
+                    for pos, (idx, _label) in enumerate(ctrl.menu_items):
+                        if idx == value:
+                            widget.set_selected(pos)
+                            break
+                else:
+                    widget.set_value(value)
+                row.set_sensitive(not ctrl.inactive and not ctrl.read_only)
+        finally:
+            self._updating = False
 
     def _apply(self, ctrl, value, resync=False):
         if self._updating:
@@ -392,26 +314,77 @@ class WindowController:
         self._schedule_save()
         if resync:
             # Mode switches can gate or rewrite other controls.
-            self._sync_from_camera()
-            self.camera_settings["controls"] = store.capture_controls(self.camera)
+            values = store.capture_controls(self.camera)
+            self.camera_settings["controls"] = values
+            self._sync_from_camera(values)
+
+    def _queue_control_write(self, ctrl, value):
+        if self._updating:
+            return
+        self._pending_controls[ctrl.id] = (ctrl, value)
+        if not self._control_timeout:
+            self._control_timeout = GLib.timeout_add(35, self._on_control_timeout)
+
+    def _on_control_timeout(self):
+        self._control_timeout = 0
+        return self._flush_control_writes()
+
+    def _flush_control_writes(self):
+        if self._control_timeout:
+            GLib.source_remove(self._control_timeout)
+            self._control_timeout = 0
+        pending = list(self._pending_controls.values())
+        self._pending_controls.clear()
+        for ctrl, value in pending:
+            self._apply(ctrl, value)
+        return GLib.SOURCE_REMOVE
 
     def _on_scale_changed(self, scale, ctrl):
-        self._apply(ctrl, int(scale.get_value()))
+        self._queue_control_write(ctrl, int(scale.get_value()))
 
     def _on_bool_changed(self, row, _pspec, ctrl):
+        self._flush_control_writes()
         self._apply(ctrl, int(row.get_active()), resync=True)
 
     def _on_menu_changed(self, row, _pspec, ctrl):
+        self._flush_control_writes()
         pos = row.get_selected()
         if 0 <= pos < len(ctrl.menu_items):
             self._apply(ctrl, ctrl.menu_items[pos][0], resync=True)
 
+    def _menu_model(self, ctrl):
+        return Gtk.StringList.new([label for _value, label in ctrl.menu_items])
+
+    def _numeric_control(self, ctrl):
+        adjustment = Gtk.Adjustment(
+            lower=ctrl.minimum,
+            upper=ctrl.maximum,
+            step_increment=ctrl.step,
+            page_increment=ctrl.step * 10,
+        )
+        scale = Gtk.Scale(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            adjustment=adjustment,
+            draw_value=False,
+            hexpand=True,
+            valign=Gtk.Align.CENTER,
+        )
+        scale.set_digits(0)
+        scale.connect("value-changed", self._on_scale_changed, ctrl)
+        spin = Gtk.SpinButton(adjustment=adjustment, digits=0, numeric=True)
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        controls.append(scale)
+        controls.append(spin)
+        return scale, controls
+
     def _on_reset(self, _button):
+        self._flush_control_writes()
         defaults = self.camera_settings["presets"]["default"]["controls"]
         result = store.apply_to_camera(self.camera, defaults)
-        self.camera_settings["controls"] = store.capture_controls(self.camera)
+        values = store.capture_controls(self.camera)
+        self.camera_settings["controls"] = values
         self._flush_save()
-        self._sync_from_camera()
+        self._sync_from_camera(values)
         self._select_preset_in_picker("default")
         self._notify_restore("Reset to camera defaults", result)
 
@@ -456,65 +429,81 @@ class WindowController:
     def _on_preset_changed(self, _picker, _pspec):
         if self._updating:
             return
+        self._flush_control_writes()
         preset_id = self._selected_preset()
         preset = self.camera_settings.get("presets", {}).get(preset_id)
         if not preset:
             return
         result = store.apply_to_camera(self.camera, preset["controls"])
-        self.camera_settings["controls"] = store.capture_controls(self.camera)
+        values = store.capture_controls(self.camera)
+        self.camera_settings["controls"] = values
         self.camera_settings["selected_preset"] = preset_id
         self._flush_save()
-        self._sync_from_camera()
+        self._sync_from_camera(values)
         self._update_preset_buttons()
         self._notify_restore(f"Applied {preset['name']}", result)
 
     def _on_save_preset(self, _button):
+        self._flush_control_writes()
         preset_id = self._selected_preset()
+        values = store.capture_controls(self.camera)
         try:
-            store.update_preset(
-                self.camera_settings, preset_id, store.capture_controls(self.camera)
-            )
+            store.update_preset(self.camera_settings, preset_id, values)
         except (KeyError, ValueError) as exc:
             self._notify(str(exc))
             return
-        self.camera_settings["controls"] = store.capture_controls(self.camera)
+        self.camera_settings["controls"] = values
         self._flush_save()
         self._notify(f"Saved {self.camera_settings['presets'][preset_id]['name']}")
 
     def _on_new_preset(self, _button):
-        dialog = Gtk.Dialog(title="New Preset", transient_for=self, modal=True)
-        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Create", Gtk.ResponseType.OK)
-        box = dialog.get_content_area()
+        dialog = Gtk.Window(title="New Preset", transient_for=self, modal=True)
+        dialog.set_default_size(360, -1)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.set_spacing(12)
         box.set_margin_top(18)
         box.set_margin_bottom(18)
         box.set_margin_start(18)
         box.set_margin_end(18)
         entry = Gtk.Entry(placeholder_text="Preset name", activates_default=True)
-        dialog.set_default_response(Gtk.ResponseType.OK)
         box.append(entry)
-        dialog.connect("response", self._on_new_preset_response, entry)
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        actions.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label="Cancel")
+        create = Gtk.Button(label="Create")
+        create.add_css_class("suggested-action")
+        create.set_receives_default(True)
+        cancel.connect("clicked", lambda _button: dialog.destroy())
+        create.connect("clicked", lambda _button: self._on_new_preset_response(dialog, entry))
+        entry.connect("activate", lambda _entry: self._on_new_preset_response(dialog, entry))
+        actions.append(cancel)
+        actions.append(create)
+        box.append(actions)
+        dialog.set_child(box)
+        dialog.set_default_widget(create)
         dialog.present()
+        entry.grab_focus()
 
-    def _on_new_preset_response(self, dialog, response, entry):
-        if response == Gtk.ResponseType.OK:
-            try:
-                preset_id = store.create_preset(
-                    self.camera_settings,
-                    entry.get_text(),
-                    store.capture_controls(self.camera),
-                )
-            except ValueError as exc:
-                self._notify(str(exc))
-            else:
-                self.camera_settings["selected_preset"] = preset_id
-                self._flush_save()
-                self._refresh_preset_picker(preset_id)
-                self._notify(f"Created {self.camera_settings['presets'][preset_id]['name']}")
+    def _on_new_preset_response(self, dialog, entry):
+        self._flush_control_writes()
+        try:
+            preset_id = store.create_preset(
+                self.camera_settings,
+                entry.get_text(),
+                store.capture_controls(self.camera),
+            )
+        except ValueError as exc:
+            self._notify(str(exc))
+            entry.grab_focus()
+            return
+        self.camera_settings["selected_preset"] = preset_id
+        self._flush_save()
+        self._refresh_preset_picker(preset_id)
+        self._notify(f"Created {self.camera_settings['presets'][preset_id]['name']}")
         dialog.destroy()
 
     def _on_delete_preset(self, _button):
+        self._flush_control_writes()
         preset_id = self._selected_preset()
         try:
             name = self.camera_settings["presets"][preset_id]["name"]
@@ -524,11 +513,12 @@ class WindowController:
             return
         defaults = self.camera_settings["presets"]["default"]
         result = store.apply_to_camera(self.camera, defaults["controls"])
-        self.camera_settings["controls"] = store.capture_controls(self.camera)
+        values = store.capture_controls(self.camera)
+        self.camera_settings["controls"] = values
         self.camera_settings["selected_preset"] = "default"
         self._refresh_preset_picker("default")
         self._flush_save()
-        self._sync_from_camera()
+        self._sync_from_camera(values)
         self._notify_restore(f"Deleted {name}; applied Default", result)
 
     def _notify_restore(self, action, result):
@@ -551,69 +541,111 @@ class WindowController:
             GLib.source_remove(self._save_timeout)
         self._save_timeout = GLib.timeout_add(400, self._flush_save)
 
-    def _flush_save(self):
+    def _flush_save(self, wait=False):
         self._save_timeout = 0
         for cam in self.cameras:
-            entry = store.camera_entry(self.settings, cam)
-            entry["device"] = cam.path
-        store.save(self.settings)
+            entry = self.settings.get("cameras", {}).get(cam.key)
+            if entry is not None:
+                entry["device"] = cam.path
+        future = self._save_executor.submit(store.save, copy.deepcopy(self.settings))
+        if wait:
+            future.result(timeout=10)
+        else:
+            future.add_done_callback(self._on_save_finished)
         return GLib.SOURCE_REMOVE
+
+    def _on_save_finished(self, future):
+        try:
+            future.result()
+        except Exception as exc:
+            LOGGER.exception("Could not save settings")
+            if not self._closed:
+                GLib.idle_add(self._notify, f"Could not save settings: {exc}")
 
     # ---------- autostart ----------
 
     def _autostart_enabled(self):
-        if not os.path.exists(SYSTEMD_UNIT):
+        desired = self.settings.setdefault("app", {}).get("auto_restore", False)
+        return bool(desired and service.SYSTEMD_UNIT.exists())
+
+    def _run_service_task(self, task, callback):
+        if self._service_busy:
             return False
-        try:
-            result = subprocess.run(
-                ["systemctl", "--user", "is-enabled", "--quiet",
-                 "logioki-restore.service"],
-                check=False,
-            )
-        except OSError:
-            return False
-        return result.returncode == 0
+        self._service_busy = True
+
+        def worker():
+            try:
+                result = task()
+            except Exception as exc:
+                result = (False, str(exc))
+            GLib.idle_add(callback, *result)
+
+        threading.Thread(target=worker, name="logioki-systemd", daemon=True).start()
+        return True
 
     def _ensure_autostart(self):
-        if self._autostart_enabled():
-            return GLib.SOURCE_REMOVE
-        ok, error = install_restore_service()
-        if not ok:
-            self._notify(f"Could not enable automatic restore: {error}")
-        if hasattr(self, "autostart_row"):
-            self._updating = True
-            self.autostart_row.set_active(ok)
-            self._updating = False
+        def ensure():
+            if service.is_restore_service_enabled():
+                return True, None
+            return service.install_restore_service()
+
+        self._run_service_task(
+            ensure,
+            lambda ok, error: self._finish_autostart_change(True, ok, error, False),
+        )
         return GLib.SOURCE_REMOVE
 
     def _on_autostart_toggled(self, row, _pspec):
         if self._updating:
             return
-        if row.get_active():
-            ok, error = install_restore_service()
-            if ok:
-                self.settings.setdefault("app", {})["auto_restore"] = True
-                self._flush_save()
-                self._notify("Settings will be restored at every login")
-            else:
-                self._updating = True
-                row.set_active(False)
-                self._updating = False
-                self._notify(f"Could not enable automatic restore: {error}")
-        else:
-            ok, error = remove_restore_service()
-            self.settings.setdefault("app", {})["auto_restore"] = False
+        enabled = row.get_active()
+        row.set_sensitive(False)
+        task = service.install_restore_service if enabled else service.remove_restore_service
+        started = self._run_service_task(
+            task,
+            lambda ok, error: self._finish_autostart_change(enabled, ok, error, True),
+        )
+        if not started:
+            self._updating = True
+            row.set_active(not enabled)
+            row.set_sensitive(True)
+            self._updating = False
+
+    def _finish_autostart_change(self, enabled, ok, error, announce):
+        self._service_busy = False
+        if self._closed:
+            return GLib.SOURCE_REMOVE
+        if hasattr(self, "autostart_row"):
+            self._updating = True
+            self.autostart_row.set_active(enabled if ok else not enabled)
+            self.autostart_row.set_sensitive(True)
+            self._updating = False
+        if ok:
+            self.settings.setdefault("app", {})["auto_restore"] = enabled
             self._flush_save()
-            if not ok:
-                self._notify(f"Could not disable automatic restore: {error}")
+            if announce:
+                message = (
+                    "Settings will be restored at every login"
+                    if enabled
+                    else "Automatic login restore disabled"
+                )
+                self._notify(message)
+        else:
+            action = "enable" if enabled else "disable"
+            self._notify(f"Could not {action} automatic restore: {error}")
+        return GLib.SOURCE_REMOVE
 
 
 if Adw is not None:
+
     class GnomeWindow(WindowController, Adw.ApplicationWindow):
         def __init__(self, app):
             Adw.ApplicationWindow.__init__(
-                self, application=app, title="Logioki",
-                default_width=760, default_height=860,
+                self,
+                application=app,
+                title="Logioki",
+                default_width=760,
+                default_height=860,
             )
             self._init_controller()
 
@@ -632,6 +664,7 @@ if Adw is not None:
                 icon_name="edit-undo-symbolic",
                 tooltip_text="Reset all controls to camera defaults",
             )
+            _set_accessible_label(reset, "Reset all controls to camera defaults")
             reset.set_sensitive(bool(self.cameras))
             reset.connect("clicked", self._on_reset)
             header.pack_end(reset)
@@ -642,15 +675,18 @@ if Adw is not None:
             scroll = Gtk.ScrolledWindow(vexpand=True)
             self.toast_overlay.set_child(scroll)
             clamp = Adw.Clamp(
-                maximum_size=680, margin_top=18, margin_bottom=24,
-                margin_start=12, margin_end=12,
+                maximum_size=680,
+                margin_top=18,
+                margin_bottom=24,
+                margin_start=12,
+                margin_end=12,
             )
             scroll.set_child(clamp)
 
             self.page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
             clamp.set_child(self.page_box)
 
-            self.preview = Preview()
+            self.preview = Preview(on_error=self._notify)
             self.preview.set_size_request(-1, 360)
             self.page_box.append(self.preview)
 
@@ -674,13 +710,20 @@ if Adw is not None:
                 subtitle="Apply a saved group of camera settings",
             )
             self.preset_picker = Gtk.DropDown(valign=Gtk.Align.CENTER)
-            self.preset_picker.set_size_request(190, -1)
+            self.preset_picker.set_size_request(150, -1)
             self.preset_picker.connect("notify::selected", self._on_preset_changed)
             preset_row.add_suffix(self.preset_picker)
             presets.add(preset_row)
 
             actions = Adw.ActionRow(title="Manage presets")
-            action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            action_box = Gtk.FlowBox(
+                selection_mode=Gtk.SelectionMode.NONE,
+                column_spacing=6,
+                row_spacing=6,
+                min_children_per_line=1,
+                max_children_per_line=3,
+                homogeneous=True,
+            )
             self.save_preset_button = Gtk.Button(label="Save Current")
             self.save_preset_button.connect("clicked", self._on_save_preset)
             new_button = Gtk.Button(label="New…")
@@ -688,16 +731,15 @@ if Adw is not None:
             self.delete_preset_button = Gtk.Button(
                 icon_name="user-trash-symbolic", tooltip_text="Delete custom preset"
             )
+            _set_accessible_label(self.delete_preset_button, "Delete custom preset")
             self.delete_preset_button.connect("clicked", self._on_delete_preset)
-            action_box.append(self.save_preset_button)
-            action_box.append(new_button)
-            action_box.append(self.delete_preset_button)
+            action_box.insert(self.save_preset_button, -1)
+            action_box.insert(new_button, -1)
+            action_box.insert(self.delete_preset_button, -1)
             actions.add_suffix(action_box)
             presets.add(actions)
             self.groups_box.append(presets)
-            self._refresh_preset_picker(
-                self.camera_settings.get("selected_preset", "default")
-            )
+            self._refresh_preset_picker(self.camera_settings.get("selected_preset", "default"))
 
             titles = {"User Controls": "Image", "Camera Controls": "Camera"}
             for group_name, controls in cam.groups.items():
@@ -712,7 +754,7 @@ if Adw is not None:
             self.autostart_row = Adw.SwitchRow(
                 title="Apply at login",
                 subtitle="Restore these settings after reboot, even if Logioki "
-                         "isn't opened (systemd user service)",
+                "isn't opened (systemd user service)",
             )
             self.autostart_row.set_active(self._autostart_enabled())
             self.autostart_row.connect("notify::active", self._on_autostart_toggled)
@@ -724,33 +766,23 @@ if Adw is not None:
         def _make_row(self, ctrl):
             if ctrl.type == v4l2ctl.TYPE_BOOL:
                 row = Adw.SwitchRow(title=ctrl.name)
+                _set_accessible_label(row, ctrl.name)
                 row.connect("notify::active", self._on_bool_changed, ctrl)
                 self.rows[ctrl.id] = (row, row)
                 return row
 
             if ctrl.type == v4l2ctl.TYPE_MENU:
-                labels = Gtk.StringList.new([label for _, label in ctrl.menu_items])
-                row = Adw.ComboRow(title=ctrl.name, model=labels)
+                row = Adw.ComboRow(title=ctrl.name, model=self._menu_model(ctrl))
+                _set_accessible_label(row, ctrl.name)
                 row.connect("notify::selected", self._on_menu_changed, ctrl)
                 self.rows[ctrl.id] = (row, row)
                 return row
 
             if ctrl.type == v4l2ctl.TYPE_INT:
                 row = Adw.ActionRow(title=ctrl.name)
-                adj = Gtk.Adjustment(
-                    lower=ctrl.minimum, upper=ctrl.maximum,
-                    step_increment=ctrl.step, page_increment=ctrl.step * 10,
-                )
-                scale = Gtk.Scale(
-                    orientation=Gtk.Orientation.HORIZONTAL,
-                    adjustment=adj, draw_value=True,
-                    value_pos=Gtk.PositionType.RIGHT,
-                    hexpand=True, valign=Gtk.Align.CENTER,
-                )
-                scale.set_size_request(260, -1)
-                scale.set_digits(0)
-                scale.connect("value-changed", self._on_scale_changed, ctrl)
-                row.add_suffix(scale)
+                scale, controls = self._numeric_control(ctrl)
+                _set_accessible_label(scale, ctrl.name)
+                row.add_suffix(controls)
                 self.rows[ctrl.id] = (row, scale)
                 return row
 
@@ -771,8 +803,11 @@ if Adw is not None:
 class KdeWindow(WindowController, Gtk.ApplicationWindow):
     def __init__(self, app):
         Gtk.ApplicationWindow.__init__(
-            self, application=app, title="Logioki",
-            default_width=1120, default_height=760,
+            self,
+            application=app,
+            title="Logioki",
+            default_width=960,
+            default_height=700,
         )
         self._init_controller()
         self._notification_timeout = 0
@@ -799,6 +834,7 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
             icon_name="edit-undo-symbolic",
             tooltip_text="Reset camera to factory defaults",
         )
+        _set_accessible_label(reset, "Reset all controls to camera defaults")
         reset.set_sensitive(bool(self.cameras))
         reset.connect("clicked", self._on_reset)
         header.pack_end(reset)
@@ -820,11 +856,11 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
         root.add_overlay(self.notification_revealer)
 
         split = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        split.set_position(690)
+        split.set_position(610)
         split.set_resize_start_child(True)
-        split.set_shrink_start_child(False)
-        split.set_resize_end_child(False)
-        split.set_shrink_end_child(False)
+        split.set_shrink_start_child(True)
+        split.set_resize_end_child(True)
+        split.set_shrink_end_child(True)
         self.content_holder.append(split)
 
         preview_pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
@@ -834,20 +870,25 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
         description = Gtk.Label(
             label="See every adjustment instantly before using the camera elsewhere.",
             xalign=0,
+            wrap=True,
         )
         description.add_css_class("kde-preview-subtitle")
         preview_pane.append(heading)
         preview_pane.append(description)
 
         preview_frame = Gtk.AspectFrame(
-            ratio=16 / 9, obey_child=False, xalign=0.5, yalign=0.5,
-            hexpand=True, vexpand=True,
+            ratio=16 / 9,
+            obey_child=False,
+            xalign=0.5,
+            yalign=0.5,
+            hexpand=True,
+            vexpand=True,
         )
         preview_frame.add_css_class("kde-preview-frame")
         preview_frame.set_overflow(Gtk.Overflow.HIDDEN)
         preview_overlay = Gtk.Overlay()
 
-        self.preview = Preview()
+        self.preview = Preview(on_error=self._notify)
         self.preview.add_css_class("kde-preview")
         preview_overlay.set_child(self.preview)
         live_badge = Gtk.Label(label="●  LIVE", halign=Gtk.Align.START, valign=Gtk.Align.START)
@@ -861,7 +902,9 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
         footer.append(Gtk.Image(icon_name="dialog-information-symbolic"))
         hint = Gtk.Label(
             label="Settings remain active after Logioki closes, until the camera loses power.",
-            xalign=0, wrap=True, hexpand=True,
+            xalign=0,
+            wrap=True,
+            hexpand=True,
         )
         hint.add_css_class("kde-hint")
         footer.append(hint)
@@ -870,10 +913,16 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
 
         inspector = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         inspector.add_css_class("kde-inspector")
+        inspector.set_size_request(330, -1)
         switcher_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         switcher_bar.add_css_class("kde-tabbar")
-        self.stack_switcher = Gtk.StackSwitcher(halign=Gtk.Align.CENTER, hexpand=True)
-        switcher_bar.append(self.stack_switcher)
+        self.page_picker = Gtk.DropDown(
+            model=Gtk.StringList.new(["Presets", "Image", "Camera", "Startup"]),
+            hexpand=True,
+        )
+        _set_accessible_label(self.page_picker, "Settings page")
+        self.page_picker.connect("notify::selected", self._on_settings_page_changed)
+        switcher_bar.append(self.page_picker)
         inspector.append(switcher_bar)
 
         self.settings_stack = Gtk.Stack(
@@ -881,7 +930,6 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
             transition_duration=160,
             vexpand=True,
         )
-        self.stack_switcher.set_stack(self.settings_stack)
         inspector.append(self.settings_stack)
         split.set_end_child(inspector)
 
@@ -910,8 +958,15 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
         preset_hero.append(self.preset_picker)
         preset_content.append(preset_hero)
 
-        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        new_button = Gtk.Button(label="New preset…", hexpand=True)
+        action_box = Gtk.FlowBox(
+            selection_mode=Gtk.SelectionMode.NONE,
+            column_spacing=8,
+            row_spacing=8,
+            min_children_per_line=1,
+            max_children_per_line=3,
+            homogeneous=True,
+        )
+        new_button = Gtk.Button(label="New preset…")
         new_button.connect("clicked", self._on_new_preset)
         self.save_preset_button = Gtk.Button(label="Save changes")
         self.save_preset_button.add_css_class("suggested-action")
@@ -919,16 +974,15 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
         self.delete_preset_button = Gtk.Button(
             icon_name="edit-delete-symbolic", tooltip_text="Delete this custom preset"
         )
+        _set_accessible_label(self.delete_preset_button, "Delete custom preset")
         self.delete_preset_button.add_css_class("flat")
         self.delete_preset_button.connect("clicked", self._on_delete_preset)
-        action_box.append(new_button)
-        action_box.append(self.save_preset_button)
-        action_box.append(self.delete_preset_button)
+        action_box.insert(new_button, -1)
+        action_box.insert(self.save_preset_button, -1)
+        action_box.insert(self.delete_preset_button, -1)
         preset_content.append(action_box)
         self.settings_stack.add_titled(preset_page, "presets", "Presets")
-        self._refresh_preset_picker(
-            self.camera_settings.get("selected_preset", "streaming")
-        )
+        self._refresh_preset_picker(self.camera_settings.get("selected_preset", "streaming"))
 
         image_page, image_content = self._make_page(
             "Image",
@@ -968,6 +1022,12 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
 
         self._sync_from_camera()
 
+    def _on_settings_page_changed(self, picker, _pspec):
+        page_names = ("presets", "image", "camera", "startup")
+        position = picker.get_selected()
+        if 0 <= position < len(page_names):
+            self.settings_stack.set_visible_child_name(page_names[position])
+
     def _make_page(self, title, description):
         scroll = Gtk.ScrolledWindow(
             hscrollbar_policy=Gtk.PolicyType.NEVER,
@@ -1002,15 +1062,16 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
                 ctrl.name, self._control_hint(ctrl.name), self._on_bool_changed, ctrl
             )
             self.rows[ctrl.id] = (row, switch)
+            _set_accessible_label(switch, ctrl.name)
             return row
 
         if ctrl.type == v4l2ctl.TYPE_MENU:
             row = self._make_row_box()
             text = self._make_row_text(ctrl.name, self._control_hint(ctrl.name))
-            labels = Gtk.StringList.new([label for _, label in ctrl.menu_items])
-            dropdown = Gtk.DropDown(model=labels, valign=Gtk.Align.CENTER)
-            dropdown.set_size_request(150, -1)
+            dropdown = Gtk.DropDown(model=self._menu_model(ctrl), valign=Gtk.Align.CENTER)
+            dropdown.set_size_request(120, -1)
             dropdown.connect("notify::selected", self._on_menu_changed, ctrl)
+            _set_accessible_label(dropdown, ctrl.name)
             row.append(text)
             row.append(dropdown)
             self.rows[ctrl.id] = (row, dropdown)
@@ -1020,19 +1081,9 @@ class KdeWindow(WindowController, Gtk.ApplicationWindow):
             row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
             row.add_css_class("kde-row")
             row.append(self._make_row_text(ctrl.name, self._control_hint(ctrl.name)))
-            adj = Gtk.Adjustment(
-                lower=ctrl.minimum, upper=ctrl.maximum,
-                step_increment=ctrl.step, page_increment=ctrl.step * 10,
-            )
-            scale = Gtk.Scale(
-                orientation=Gtk.Orientation.HORIZONTAL,
-                adjustment=adj, draw_value=True,
-                value_pos=Gtk.PositionType.RIGHT,
-                hexpand=True,
-            )
-            scale.set_digits(0)
-            scale.connect("value-changed", self._on_scale_changed, ctrl)
-            row.append(scale)
+            scale, controls = self._numeric_control(ctrl)
+            _set_accessible_label(scale, ctrl.name)
+            row.append(controls)
             self.rows[ctrl.id] = (row, scale)
             return row
 
@@ -1134,6 +1185,14 @@ class App(ApplicationBase):
 
     def do_startup(self):
         ApplicationBase.do_startup(self)
+        quit_action = Gio.SimpleAction.new("quit", None)
+        quit_action.connect("activate", self._quit_cleanly)
+        self.add_action(quit_action)
+        close_action = Gio.SimpleAction.new("close", None)
+        close_action.connect("activate", self._close_active_window)
+        self.add_action(close_action)
+        self.set_accels_for_action("app.quit", ["<Primary>q"])
+        self.set_accels_for_action("app.close", ["<Primary>w"])
         if USE_ADWAITA:
             Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.DEFAULT)
         else:
@@ -1143,6 +1202,29 @@ class App(ApplicationBase):
         win = self.get_active_window() or WindowClass(self)
         win.present()
 
+    def _close_active_window(self, _action, _parameter):
+        window = self.get_active_window()
+        if window is not None:
+            window.close()
+
+    def _quit_cleanly(self, _action, _parameter):
+        windows = list(self.get_windows())
+        if not windows:
+            self.quit()
+            return
+        for window in windows:
+            window.close()
+
+
+def main(argv=None):
+    argv = list(sys.argv if argv is None else argv)
+    args, gtk_arguments = _argument_parser().parse_known_args(argv[1:])
+    if args.apply:
+        return _run_headless(args.retry)
+    if args.retry:
+        _argument_parser().error("--retry requires --apply")
+    return App().run([argv[0], *gtk_arguments])
+
 
 if __name__ == "__main__":
-    sys.exit(App().run([a for a in sys.argv if a != "--apply"]))
+    sys.exit(main())

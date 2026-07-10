@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.solpulse.Logioki</id>
+  <name>Logioki</name>
+  <summary>Control image settings on UVC webcams</summary>
+  <developer id="io.github.solpulse">
+    <name>Logioki Contributors</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <description>
+    <p>
+      Logioki provides live preview, presets, and persistent image controls for
+      webcams that expose standard Linux UVC controls.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.solpulse.Logioki.desktop</launchable>
+  <provides>
+    <binary>logioki</binary>
+  </provides>
+  <categories>
+    <category>AudioVideo</category>
+  </categories>
+  <url type="homepage">https://github.com/solpulse/logioki</url>
+  <content_rating type="oars-1.1"/>
+</component>
