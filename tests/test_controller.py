@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import logioki
+from device_monitor import DeviceRegistry
 
 
 class ControllerTests(unittest.TestCase):
@@ -32,6 +33,26 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(OSError):
             controller._sync_from_camera()
         self.assertFalse(controller._updating)
+
+    def test_shutdown_releases_resources_when_final_save_fails(self):
+        controller = object.__new__(logioki.WindowController)
+        camera = mock.Mock(path="/dev/video0")
+        controller._closed = False
+        controller._save_timeout = 0
+        controller._device_refresh_timeout = 0
+        controller._device_monitor = None
+        controller._device_registry = DeviceRegistry(lambda: (), [camera])
+        controller._flush_control_writes = mock.Mock()
+        controller._flush_save = mock.Mock(side_effect=OSError("disk full"))
+        controller.preview = mock.Mock()
+        controller._save_executor = mock.Mock()
+
+        with self.assertLogs(logioki.LOGGER, level="ERROR"):
+            self.assertFalse(controller._on_close(None))
+
+        controller.preview.stop.assert_called_once_with()
+        controller._save_executor.shutdown.assert_called_once_with(wait=True, cancel_futures=False)
+        camera.close.assert_called_once_with()
 
 
 if __name__ == "__main__":

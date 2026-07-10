@@ -49,8 +49,13 @@ Or launch **Logioki** from your desktop's app grid (the user installation places
 
 ## Files
 
-- `logioki.py` — GTK4/libadwaita app; `--apply` flag restores settings
-  headlessly (used by the login service)
+- `logioki.py` — lightweight GTK application bootstrap and desktop selection
+- `controller.py` — shared GTK camera, preset, persistence, and hot-plug orchestration
+- `gnome_view.py` — native GNOME/libadwaita presentation
+- `kde_qt.py` — optional native KDE/Qt 6 presentation
+- `kde_view.py` — Plasma-oriented GTK fallback when PySide6 is unavailable
+- `models.py` — typed camera protocols and persistent settings models
+- `device_monitor.py` — toolkit-neutral device discovery reconciliation
 - `logioki_cli.py` — dependency-light installed command-line entry point
 - `preview.py` — bounded GStreamer preview and error handling
 - `service.py` — atomic systemd user-service management
@@ -84,8 +89,10 @@ The complete CI job also constructs both desktop variants under Xvfb using
 ## Requirements
 
 Python 3, GTK4 + libadwaita + GStreamer via PyGObject — all present on
-stock Fedora Workstation. No third-party Python packages are required at
-runtime, and the application does not need root access.
+stock Fedora Workstation. No third-party Python packages are required for the
+GNOME interface or headless restore, and the application does not need root
+access. On KDE Plasma, install `logioki[kde]` to use the native Qt 6 interface;
+without PySide6, Logioki retains its GTK-based Plasma fallback.
 
 ## Notes
 

@@ -6,6 +6,7 @@ import argparse
 import sys
 
 import store
+from desktop import detect_desktop
 
 
 def _non_negative_seconds(value: str) -> int:
@@ -36,6 +37,15 @@ def main(argv=None) -> int:
         return 0 if matched and result.ok else 1
     if args.retry:
         parser.error("--retry requires --apply")
+
+    if detect_desktop() == "kde":
+        try:
+            from kde_qt import main as kde_main
+        except ModuleNotFoundError as exc:
+            if not exc.name or not exc.name.startswith("PySide6"):
+                raise
+        else:
+            return kde_main([argv[0], *gtk_arguments])
 
     from logioki import App
 

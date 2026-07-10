@@ -34,6 +34,7 @@ class Preview(Gtk.Picture):
         self._bus = None
         self._bus_handler = 0
         self._idle_id = 0
+        self._idle_generation: int | None = None
         self._generation = 0
         self._pending_generation: int | None = None
         self._state_lock = threading.Lock()
@@ -62,6 +63,7 @@ class Preview(Gtk.Picture):
         with self._state_lock:
             self._generation += 1
             idle_id, self._idle_id = self._idle_id, 0
+            self._idle_generation = None
             self._pending_generation = None
         if idle_id:
             GLib.source_remove(idle_id)
@@ -120,6 +122,7 @@ class Preview(Gtk.Picture):
             is_current = generation == self._generation
             if is_current:
                 self._idle_id = idle_id
+                self._idle_generation = generation
         if not is_current:
             GLib.source_remove(idle_id)
         return Gst.FlowReturn.OK
@@ -127,7 +130,9 @@ class Preview(Gtk.Picture):
     def _show_frame(self, generation: int, data: bytes, width: int, height: int, stride: int):
         with self._state_lock:
             current = generation == self._generation
-            self._idle_id = 0
+            if self._idle_generation == generation:
+                self._idle_id = 0
+                self._idle_generation = None
             if self._pending_generation == generation:
                 self._pending_generation = None
         if current and self.pipeline is not None:

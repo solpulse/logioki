@@ -27,9 +27,27 @@ Source = "https://github.com/solpulse/logioki"
 
 [project.scripts]
 logioki = "logioki_cli:main"
+logioki-kde = "kde_qt:main"
+
+[project.optional-dependencies]
+kde = ["PySide6>=6.7,<7"]
 
 [tool.setuptools]
-py-modules = ["logioki", "logioki_cli", "preview", "service", "store", "v4l2ctl"]
+py-modules = [
+  "device_monitor",
+  "desktop",
+  "controller",
+  "gnome_view",
+  "kde_view",
+  "kde_qt",
+  "logioki",
+  "logioki_cli",
+  "models",
+  "preview",
+  "service",
+  "store",
+  "v4l2ctl",
+]
 include-package-data = false
 
 [tool.setuptools.exclude-package-data]

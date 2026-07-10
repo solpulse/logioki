@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import v4l2ctl
+from models import CameraDevice, CameraSettings, SettingsData
 from v4l2ctl import TYPE_BOOL, TYPE_INT, TYPE_MENU
 
 LOGGER = logging.getLogger(__name__)
@@ -61,8 +62,13 @@ class RestoreResult:
         self.failed.update(namespaced(other.failed))
 
 
-def _empty_data() -> dict[str, Any]:
-    return {"version": SCHEMA_VERSION, "app": {"auto_restore": False}, "cameras": {}}
+def _empty_data() -> SettingsData:
+    return {
+        "version": SCHEMA_VERSION,
+        "app": {"auto_restore": False},
+        "cameras": {},
+        "legacy_cameras": {},
+    }
 
 
 def _quarantine_corrupt_config(path: Path) -> None:
@@ -132,6 +138,13 @@ def _validate_current_data(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data["app"].get("auto_restore", False), bool):
         raise ValueError("auto_restore must be a boolean")
     data["app"].setdefault("auto_restore", False)
+    legacy_cameras = data.setdefault("legacy_cameras", {})
+    if not isinstance(legacy_cameras, dict):
+        raise ValueError("legacy settings cameras must be an object")
+    if len(legacy_cameras) > MAX_CAMERAS:
+        raise ValueError("settings contain too many legacy cameras")
+    for camera_key, entry in legacy_cameras.items():
+        _validate_camera_entry(camera_key, entry)
     for camera_key, entry in cameras.items():
         _validate_camera_entry(camera_key, entry)
     return data
@@ -230,7 +243,7 @@ def save(data: dict[str, Any]) -> None:
                 os.unlink(temporary_name)
 
 
-def capture_controls(cam, defaults: bool = False) -> dict[str, int]:
+def capture_controls(cam: CameraDevice, defaults: bool = False) -> dict[str, int]:
     """Return a serializable control snapshot, omitting unreadable controls."""
     values = {}
     for ctrl in cam.controls:
@@ -247,7 +260,9 @@ def capture_controls(cam, defaults: bool = False) -> dict[str, int]:
     return values
 
 
-def camera_entry(data: dict[str, Any], cam, create: bool = True) -> dict[str, Any] | None:
+def camera_entry(
+    data: SettingsData, cam: CameraDevice, create: bool = True
+) -> CameraSettings | None:
     """Get a camera entry, migrating the old model-name key when possible."""
     cameras = data.setdefault("cameras", {})
     entry = cameras.get(cam.key)
@@ -395,7 +410,7 @@ def _apply_control_pass(cam, by_id, items, allowed_types, result: RestoreResult)
             result.applied[key] = actual
 
 
-def apply_to_camera(cam, saved_values: Mapping[str, Any]) -> RestoreResult:
+def apply_to_camera(cam: CameraDevice, saved_values: Mapping[str, Any]) -> RestoreResult:
     """Push values to the device and verify every active write by reading it back."""
     result = RestoreResult()
     by_id, items = _parse_saved_controls(cam, saved_values, result)

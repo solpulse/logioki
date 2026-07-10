@@ -46,7 +46,24 @@ jobs:
         run: |
           python -m ruff format --check .
           python -m ruff check .
+          python -m mypy --strict models.py device_monitor.py desktop.py
       - name: Scan Python code for security issues
         run: >-
           python -m bandit --recursive . --exclude ./.git,./tests
           --severity-level medium --confidence-level medium
+
+  native-kde-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+      - name: Install native KDE extra
+        run: python -m pip install --disable-pip-version-check '.[kde]'
+      - name: Smoke-test native Qt interface
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest tests.test_kde_qt -v

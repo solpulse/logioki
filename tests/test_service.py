@@ -47,6 +47,31 @@ class RestoreServiceTests(unittest.TestCase):
         self.assertTrue(os.path.isabs(command[0]))
         self.assertEqual("--user", command[1])
 
+    def test_remove_disables_deletes_and_reloads_unit(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            unit = Path(directory) / service.UNIT_NAME
+            unit.write_text("unit", encoding="utf-8")
+            completed = mock.Mock(returncode=0, stderr="")
+            with (
+                mock.patch.object(service, "SYSTEMD_UNIT", unit),
+                mock.patch.object(service, "_systemctl", return_value=completed) as systemctl,
+            ):
+                self.assertEqual((True, None), service.remove_restore_service())
+        self.assertEqual(("disable", service.UNIT_NAME), systemctl.call_args_list[0].args)
+        self.assertEqual(("daemon-reload",), systemctl.call_args_list[1].args)
+
+    def test_enabled_requires_installed_unit_and_systemd_confirmation(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            unit = Path(directory) / service.UNIT_NAME
+            with mock.patch.object(service, "SYSTEMD_UNIT", unit):
+                self.assertFalse(service.is_restore_service_enabled())
+            unit.touch()
+            with (
+                mock.patch.object(service, "SYSTEMD_UNIT", unit),
+                mock.patch.object(service, "_systemctl", return_value=mock.Mock(returncode=1)),
+            ):
+                self.assertFalse(service.is_restore_service_enabled())
+
 
 if __name__ == "__main__":
     unittest.main()
