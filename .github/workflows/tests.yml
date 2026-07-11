@@ -73,7 +73,7 @@ jobs:
       - name: Install Qt runtime dependency
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends libegl1
+          sudo apt-get install --no-install-recommends libegl1 libpulse0
       - name: Install unified GUI extra
         run: python -m pip install --disable-pip-version-check '.[gui]'
       - name: Smoke-test packaged QML boundary
