@@ -48,11 +48,10 @@ Or launch **Logioki** from your desktop's app grid (the user installation places
 
 ## Files
 
-- `logioki.py` — dependency-light compatibility launcher
+- `logioki.py` — dependency-light application launcher
 - `qml_app.py` — unified Qt Quick application bootstrap
 - `application_view_model.py` — typed QML boundary and asynchronous orchestration
 - `logioki_ui/qml/` — adaptive design tokens, components, and screens
-- `controller.py`, `gnome_view.py`, `kde_view.py`, `kde_qt.py` — temporary migration fallback
 - `models.py` — typed camera protocols and persistent settings models
 - `device_monitor.py` — toolkit-neutral device discovery reconciliation
 - `logioki_cli.py` — dependency-light installed command-line entry point

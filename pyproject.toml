@@ -30,7 +30,6 @@ logioki = "logioki_cli:main"
 
 [project.optional-dependencies]
 gui = ["PySide6>=6.7,<7"]
-kde = ["PySide6>=6.7,<7"]
 
 [tool.setuptools]
 py-modules = [
@@ -40,16 +39,11 @@ py-modules = [
   "desktop",
   "firmware_provider",
   "flatpak_portal",
-  "controller",
-  "gnome_view",
-  "kde_view",
-  "kde_qt",
   "logioki",
   "logioki_cli",
   "application_view_model",
   "qml_app",
   "models",
-  "preview",
   "service",
   "settings_repository",
   "store",

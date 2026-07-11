@@ -17,9 +17,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends \
-            appstream desktop-file-utils gir1.2-adw-1 gir1.2-gst-plugins-base-1.0 \
-            gir1.2-gstreamer-1.0 gir1.2-gtk-4.0 gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good python3-gi python3-pip xauth xvfb
+            appstream desktop-file-utils libegl1 libpulse0 python3-pip
       - name: Install unified GUI
         run: python3 -m pip install --break-system-packages --disable-pip-version-check '.[gui]'
       - name: Run unit tests
