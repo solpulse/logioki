@@ -18,6 +18,13 @@ class DesktopDetectionTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual("gnome", desktop.detect_desktop())
 
+    def test_macos_uses_the_future_platform_profile(self):
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(desktop.sys, "platform", "darwin"),
+        ):
+            self.assertEqual("macos", desktop.detect_desktop())
+
 
 if __name__ == "__main__":
     unittest.main()

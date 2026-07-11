@@ -19,7 +19,8 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertTrue(ok, error)
             with open(unit_path) as f:
                 unit = f.read()
-            self.assertIn("--apply --retry=30", unit)
+            self.assertIn('"--apply" "--retry=30"', unit)
+            self.assertIn("ConditionPathExists=!", unit)
             self.assertIn("WantedBy=default.target", unit)
             self.assertIn("NoNewPrivileges=yes", unit)
             self.assertIn("CapabilityBoundingSet=\n", unit)
@@ -39,6 +40,17 @@ class RestoreServiceTests(unittest.TestCase):
         self.assertEqual('"100%% ready"', service._systemd_quote("100% ready"))
         with self.assertRaises(ValueError):
             service._systemd_quote("bad\nvalue")
+
+    def test_appimage_restore_uses_persistent_launcher_path(self):
+        with mock.patch.dict(os.environ, {"APPIMAGE": "/opt/Logioki AppImage"}, clear=True):
+            command = service._restore_command()
+
+        self.assertEqual(
+            ["/opt/Logioki AppImage", "--apply", "--retry=30"],
+            command,
+        )
+        unit = service._unit_contents(command)
+        self.assertIn('ExecStart="/opt/Logioki AppImage" "--apply" "--retry=30"', unit)
 
     def test_systemctl_uses_an_absolute_trusted_path(self):
         with mock.patch.object(service.subprocess, "run") as run:

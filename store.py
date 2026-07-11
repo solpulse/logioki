@@ -65,7 +65,7 @@ class RestoreResult:
 def _empty_data() -> SettingsData:
     return {
         "version": SCHEMA_VERSION,
-        "app": {"auto_restore": False},
+        "app": {"auto_restore": False, "open_at_login": False},
         "cameras": {},
         "legacy_cameras": {},
     }
@@ -137,7 +137,10 @@ def _validate_current_data(data: dict[str, Any]) -> dict[str, Any]:
         data["app"] = {}
     if not isinstance(data["app"].get("auto_restore", False), bool):
         raise ValueError("auto_restore must be a boolean")
+    if not isinstance(data["app"].get("open_at_login", False), bool):
+        raise ValueError("open_at_login must be a boolean")
     data["app"].setdefault("auto_restore", False)
+    data["app"].setdefault("open_at_login", False)
     legacy_cameras = data.setdefault("legacy_cameras", {})
     if not isinstance(legacy_cameras, dict):
         raise ValueError("legacy settings cameras must be an object")
@@ -243,11 +246,15 @@ def save(data: dict[str, Any]) -> None:
                 os.unlink(temporary_name)
 
 
-def capture_controls(cam: CameraDevice, defaults: bool = False) -> dict[str, int]:
+def capture_controls(
+    cam: CameraDevice,
+    defaults: bool = False,
+    include_read_only: bool = False,
+) -> dict[str, int]:
     """Return a serializable control snapshot, omitting unreadable controls."""
     values = {}
     for ctrl in cam.controls:
-        if getattr(ctrl, "read_only", False):
+        if getattr(ctrl, "read_only", False) and not include_read_only:
             continue
         if defaults:
             value = ctrl.default

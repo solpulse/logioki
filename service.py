@@ -22,6 +22,11 @@ SYSTEMD_UNIT = (
     / "logioki-restore.service"
 )
 UNIT_NAME = "logioki-restore.service"
+GUI_AUTOSTART_FILE = (
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    / "autostart"
+    / "io.github.solpulse.Logioki.desktop"
+)
 
 
 def _systemd_quote(value: str) -> str:
@@ -32,18 +37,19 @@ def _systemd_quote(value: str) -> str:
     return f'"{value}"'
 
 
-def _unit_contents() -> str:
-    command = " ".join(
-        (
-            _systemd_quote(sys.executable),
-            _systemd_quote(str(APP_DIR / "logioki.py")),
-            "--apply",
-            "--retry=30",
-        )
-    )
+def _restore_command() -> list[str]:
+    appimage = os.environ.get("APPIMAGE")
+    if appimage:
+        return [str(Path(appimage).resolve()), "--apply", "--retry=30"]
+    return [sys.executable, str(APP_DIR / "logioki.py"), "--apply", "--retry=30"]
+
+
+def _unit_contents(commandline: list[str] | None = None) -> str:
+    command = " ".join(_systemd_quote(argument) for argument in commandline or _restore_command())
     return f"""[Unit]
 Description=Logioki: restore webcam settings
 After=graphical-session.target
+ConditionPathExists=!{GUI_AUTOSTART_FILE}
 
 [Service]
 Type=oneshot

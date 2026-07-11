@@ -19,17 +19,26 @@ jobs:
           sudo apt-get install --no-install-recommends \
             appstream desktop-file-utils gir1.2-adw-1 gir1.2-gst-plugins-base-1.0 \
             gir1.2-gstreamer-1.0 gir1.2-gtk-4.0 gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good python3-gi xauth xvfb
+            gstreamer1.0-plugins-good python3-gi python3-pip xauth xvfb
+      - name: Install unified GUI
+        run: python3 -m pip install --break-system-packages --disable-pip-version-check '.[gui]'
       - name: Run unit tests
         run: python3 -m unittest discover -s tests -v
       - name: Validate desktop metadata
         run: |
           desktop-file-validate data/io.github.solpulse.Logioki.desktop
           appstreamcli validate --no-net data/io.github.solpulse.Logioki.metainfo.xml
-      - name: Smoke-test GNOME interface
-        run: xvfb-run -a env LOGIOKI_DESKTOP_STYLE=gnome python3 tests/ui_smoke.py
-      - name: Smoke-test KDE interface
-        run: xvfb-run -a env LOGIOKI_DESKTOP_STYLE=kde python3 tests/ui_smoke.py
+      - name: Smoke-test GNOME profile
+        run: >-
+          env QT_QPA_PLATFORM=offscreen LOGIOKI_DESKTOP_STYLE=gnome
+          LOGIOKI_HIGH_CONTRAST=1 LOGIOKI_REDUCED_MOTION=1 UI_SMOKE_DARK=1
+          UI_SMOKE_WIDTH=760 python3 tests/ui_smoke.py
+      - name: Smoke-test KDE profile
+        run: >-
+          env QT_QPA_PLATFORM=offscreen LOGIOKI_DESKTOP_STYLE=kde
+          UI_SMOKE_SCHEME=light python3 tests/ui_smoke.py
+      - name: Validate QML sources
+        run: pyside6-qmllint -I logioki_ui logioki_ui/qml/*.qml
 
   security-lint:
     runs-on: ubuntu-latest
@@ -52,7 +61,7 @@ jobs:
           python -m bandit --recursive . --exclude ./.git,./tests
           --severity-level medium --confidence-level medium
 
-  native-kde-smoke:
+  packaged-qml-smoke:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -61,9 +70,12 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.14"
-      - name: Install native KDE extra
-        run: python -m pip install --disable-pip-version-check '.[kde]'
-      - name: Smoke-test native Qt interface
+      - name: Install unified GUI extra
+        run: python -m pip install --disable-pip-version-check '.[gui]'
+      - name: Smoke-test packaged QML boundary
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest tests.test_kde_qt -v
+          LOGIOKI_PACKAGED_SMOKE: "1"
+          LOGIOKI_DESKTOP_STYLE: kde
+          UI_SMOKE_SCHEME: light
+        run: cd /tmp && python "$GITHUB_WORKSPACE/tests/ui_smoke.py"

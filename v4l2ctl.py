@@ -115,6 +115,13 @@ class Control:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class UnsupportedControl:
+    id: int
+    name: str
+    reason: str
+
+
 class Camera:
     """One capture device: control enumeration, get/set, identity key."""
 
@@ -128,6 +135,7 @@ class Camera:
             self.fd = os.open(path, os.O_RDWR)
             cap = _capability()
             fcntl.ioctl(self.fd, VIDIOC_QUERYCAP, cap)
+            self.driver = _decode(cap.driver)
             self.card = _decode(cap.card)
             self.bus_info = _decode(cap.bus_info)
             capability_flags = (
@@ -136,6 +144,7 @@ class Camera:
             self.is_capture = bool(
                 capability_flags & (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE)
             )
+            self.unsupported_controls: list[UnsupportedControl] = []
             if self.is_capture:
                 self._enumerate()
         except Exception:
@@ -226,12 +235,15 @@ class Camera:
             seen_ids.add(qc.id)
             if qc.type == TYPE_CLASS:
                 group = _decode(qc.name)
-            elif not qc.flags & V4L2_CTRL_FLAG_DISABLED and qc.type in (
-                TYPE_INT,
-                TYPE_BOOL,
-                TYPE_MENU,
-                TYPE_INTEGER_MENU,
-            ):
+            elif qc.flags & V4L2_CTRL_FLAG_DISABLED:
+                self.unsupported_controls.append(
+                    UnsupportedControl(qc.id, _decode(qc.name), "Disabled by the camera driver")
+                )
+            elif qc.type not in (TYPE_INT, TYPE_BOOL, TYPE_MENU, TYPE_INTEGER_MENU):
+                self.unsupported_controls.append(
+                    UnsupportedControl(qc.id, _decode(qc.name), f"Unsupported V4L2 type {qc.type}")
+                )
+            else:
                 menu_items = []
                 if qc.type in (TYPE_MENU, TYPE_INTEGER_MENU):
                     menu_end = min(qc.maximum, qc.minimum + MAX_MENU_ITEMS - 1)

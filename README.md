@@ -1,12 +1,12 @@
 # Logioki
 
 A native Linux control panel for Logitech (and any UVC) webcams — the missing
-Logi Tune for Linux. GTK4/libadwaita, live preview, named image presets, and
-settings that survive reboots.
+Logi Tune for Linux. Qt Quick live preview, named image presets, and settings
+that survive reboots. KDE and GNOME use the same adaptive interface.
 
 UVC webcams forget all settings on power loss. Logioki saves every change to
 `~/.config/logioki/settings.json` and re-applies it to the camera each time
-the app opens. Optional login restore can be enabled with **Apply at login**;
+the app opens. Optional login restore can be enabled with **Restore settings at login**;
 its systemd user service waits up to 30 seconds for the camera, then restores
 settings without opening the GUI.
 
@@ -19,7 +19,7 @@ python3 logioki.py
 For a user installation from a source checkout:
 
 ```sh
-python3 -m pip install --user .
+python3 -m pip install --user '.[gui]'
 logioki
 ```
 
@@ -29,9 +29,8 @@ Or launch **Logioki** from your desktop's app grid (the user installation places
 ## Features
 
 - Live 720p preview while you tune
-- Automatically uses a GNOME/libadwaita interface on GNOME and a polished
-  Plasma-oriented two-pane interface on KDE, with a large preview and compact
-  responsive settings inspector (`LOGIOKI_DESKTOP_STYLE=kde|gnome` can override it)
+- One responsive PySide6/Qt Quick interface with KDE-compact and
+  GNOME-comfortable visual profiles (`LOGIOKI_DESKTOP_STYLE=kde|gnome` can override it)
 - All controls the camera exposes, discovered at runtime: brightness,
   contrast, saturation, sharpness, white balance (auto + temperature),
   exposure (auto/manual + time), gain, backlight compensation, focus
@@ -49,25 +48,25 @@ Or launch **Logioki** from your desktop's app grid (the user installation places
 
 ## Files
 
-- `logioki.py` — lightweight GTK application bootstrap and desktop selection
-- `controller.py` — shared GTK camera, preset, persistence, and hot-plug orchestration
-- `gnome_view.py` — native GNOME/libadwaita presentation
-- `kde_qt.py` — optional native KDE/Qt 6 presentation
-- `kde_view.py` — Plasma-oriented GTK fallback when PySide6 is unavailable
+- `logioki.py` — dependency-light compatibility launcher
+- `qml_app.py` — unified Qt Quick application bootstrap
+- `application_view_model.py` — typed QML boundary and asynchronous orchestration
+- `logioki_ui/qml/` — adaptive design tokens, components, and screens
+- `controller.py`, `gnome_view.py`, `kde_view.py`, `kde_qt.py` — temporary migration fallback
 - `models.py` — typed camera protocols and persistent settings models
 - `device_monitor.py` — toolkit-neutral device discovery reconciliation
 - `logioki_cli.py` — dependency-light installed command-line entry point
-- `preview.py` — bounded GStreamer preview and error handling
+- `diagnostics.py` — redacted diagnostics and rotating local logs
+- `startup_manager.py` — independent headless-restore and GUI login settings
 - `service.py` — atomic systemd user-service management
 - `v4l2ctl.py` — v4l2 control backend (raw ioctls, no dependencies)
 - `store.py` — settings persistence and restore logic
 - `tests/` — persistence, preset, identity, verification, and service tests
 - `data/` — desktop launcher, AppStream metadata, and scalable application icon
 
-The dependency direction is deliberately one-way: the GTK application orchestrates
-the preview, settings, service, and V4L2 modules; those backend modules do not import
-the interface. The installed CLI also keeps headless restore independent of GTK and
-GStreamer, which allows the login service to run on a minimal user session.
+QML talks only to the application view model. Hardware, persistence, startup, and
+diagnostic services never depend on QML. The installed CLI keeps headless restore
+independent of PySide6 and every other GUI dependency.
 
 ## Development
 
@@ -77,22 +76,30 @@ Run the same fast checks used by continuous integration:
 python3 -m unittest discover -s tests -v
 python3 -m ruff format --check .
 python3 -m ruff check .
+pyside6-qmllint -I logioki_ui logioki_ui/qml/*.qml
 python3 -m bandit --recursive . --exclude ./.git,./tests \
   --severity-level medium --confidence-level medium
 desktop-file-validate data/io.github.solpulse.Logioki.desktop
 appstreamcli validate --no-net data/io.github.solpulse.Logioki.metainfo.xml
 ```
 
-The complete CI job also constructs both desktop variants under Xvfb using
-`tests/ui_smoke.py`. Quality-tool versions are pinned in `requirements-ci.txt`.
+The complete CI job constructs both KDE and GNOME profiles from the same QML
+application using `tests/ui_smoke.py`. Quality-tool versions are pinned in
+`requirements-ci.txt`.
+
+For the required MX Brio hardware acceptance run, select its primary capture
+node explicitly. The write test re-applies each control's current value and
+verifies the hardware readback, so it does not intentionally change the image:
+
+```sh
+LOGIOKI_TEST_CAMERA=/dev/video0 LOGIOKI_EXPECT_CAMERA='MX Brio' \
+  python3 -m unittest tests.test_hardware -v
+```
 
 ## Requirements
 
-Python 3, GTK4 + libadwaita + GStreamer via PyGObject — all present on
-stock Fedora Workstation. No third-party Python packages are required for the
-GNOME interface or headless restore, and the application does not need root
-access. On KDE Plasma, install `logioki[kde]` to use the native Qt 6 interface;
-without PySide6, Logioki retains its GTK-based Plasma fallback.
+Python 3 and PySide6 6.7 or newer (`pip install 'logioki[gui]'`). PySide6 is not
+imported by headless restore. The application does not need root access.
 
 ## Notes
 

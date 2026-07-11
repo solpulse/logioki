@@ -6,7 +6,6 @@ import argparse
 import sys
 
 import store
-from desktop import detect_desktop
 
 
 def _non_negative_seconds(value: str) -> int:
@@ -29,27 +28,22 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     parser = _parser()
-    args, gtk_arguments = parser.parse_known_args(argv[1:])
+    args, gui_arguments = parser.parse_known_args(argv[1:])
     if args.apply:
-        if gtk_arguments:
-            parser.error(f"unrecognized arguments: {' '.join(gtk_arguments)}")
+        if gui_arguments:
+            parser.error(f"unrecognized arguments: {' '.join(gui_arguments)}")
         matched, result = store.apply_all(retry_seconds=args.retry)
         return 0 if matched and result.ok else 1
     if args.retry:
         parser.error("--retry requires --apply")
 
-    if detect_desktop() == "kde":
-        try:
-            from kde_qt import main as kde_main
-        except ModuleNotFoundError as exc:
-            if not exc.name or not exc.name.startswith("PySide6"):
-                raise
-        else:
-            return kde_main([argv[0], *gtk_arguments])
-
-    from logioki import App
-
-    return App().run([argv[0], *gtk_arguments])
+    try:
+        from qml_app import main as gui_main
+    except ModuleNotFoundError as exc:
+        if not exc.name or not exc.name.startswith("PySide6"):
+            raise
+        parser.error("the graphical application requires PySide6; install logioki[gui]")
+    return gui_main([argv[0], *gui_arguments])
 
 
 if __name__ == "__main__":
