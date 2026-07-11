@@ -28,7 +28,10 @@ Or launch **Logioki** from your desktop's app grid (the user installation places
 
 ## Features
 
-- Live 720p preview while you tune
+- Capability-aware live preview that defaults to smooth 1080p60 when available,
+  with every efficient camera mode—including MX Brio 4K30—selectable in the video HUD
+- Plasma Cinematic workspace driven by the project design tokens: compact scene
+  selector, fluid video canvas, detailed settings pane, and video-first responsive layout
 - One responsive PySide6/Qt Quick interface with KDE-compact and
   GNOME-comfortable visual profiles (`LOGIOKI_DESKTOP_STYLE=kde|gnome` can override it)
 - All controls the camera exposes, discovered at runtime: brightness,
@@ -52,6 +55,7 @@ Or launch **Logioki** from your desktop's app grid (the user installation places
 - `qml_app.py` — unified Qt Quick application bootstrap
 - `application_view_model.py` — typed QML boundary and asynchronous orchestration
 - `logioki_ui/qml/` — adaptive design tokens, components, and screens
+- `DESIGN.md` — canonical Plasma Cinematic colors, typography, spacing, and component rules
 - `models.py` — typed camera protocols and persistent settings models
 - `device_monitor.py` — toolkit-neutral device discovery reconciliation
 - `logioki_cli.py` — dependency-light installed command-line entry point
@@ -102,9 +106,9 @@ imported by headless restore. The application does not need root access.
 
 ## Notes
 
-- Capture **resolution** is not a camera setting: each recording app (OBS,
-  browser, etc.) negotiates its own resolution with the camera. The MX Brio
-  offers up to 4K@30 (MJPG) / 1080p@60 to any app that asks.
+- The **Preview mode** selector controls only Logioki's live preview. Recording
+  apps such as OBS and browsers negotiate their own independent resolution.
+  The MX Brio offers up to 4K@30 (MJPEG) and 1080p@60.
 - Logitech vendor extras (HDR, FoV switching) live in UVC extension units
   and are not yet implemented here.
 

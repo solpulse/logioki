@@ -2,6 +2,8 @@ module Logioki
 singleton Design 1.0 Design.qml
 singleton PlatformProfile 1.0 PlatformProfile.qml
 Card 1.0 Card.qml
+CinematicButton 1.0 CinematicButton.qml
+CinematicTabButton 1.0 CinematicTabButton.qml
 CameraControlRow 1.0 CameraControlRow.qml
 PresetRow 1.0 PresetRow.qml
 StartupRow 1.0 StartupRow.qml

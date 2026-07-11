@@ -13,24 +13,61 @@ Item {
     signal saveRequested()
     signal deleteRequested()
 
-    implicitHeight: Math.max(Design.rowHeight, row.implicitHeight + Design.spaceCompact * 2)
+    implicitHeight: content.implicitHeight + Design.stackGap * 2
 
-    RowLayout {
-        id: row
+    Rectangle {
         anchors.fill: parent
-        anchors.margins: Design.spaceCompact
-        spacing: Design.space
-        ColumnLayout {
+        radius: Design.radius
+        color: root.enabled ? Design.surfaceContainer : Design.surfaceContainerLow
+        border.width: 1
+        border.color: Design.outlineVariant
+    }
+
+    ColumnLayout {
+        id: content
+        anchors.fill: parent
+        anchors.margins: Design.stackGap
+        spacing: Design.controlInnerGap
+        RowLayout {
             Layout.fillWidth: true
-            spacing: 2
-            Label { text: root.name; font.pixelSize: Design.rowTitleSize; font.weight: Font.Medium; color: Design.text }
-            Label { text: root.builtin ? (root.name === "Default" ? "Camera-reported defaults · Read-only" : "Editable starter preset") : "Custom preset"; font.pixelSize: Design.supportingSize; color: Design.mutedText; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            spacing: Design.controlInnerGap
+            Rectangle {
+                implicitWidth: 4
+                implicitHeight: 24
+                radius: 2
+                color: root.editable ? Design.primary : Design.outline
+            }
+            Label {
+                text: root.name
+                font.family: Design.fontFamily
+                font.pixelSize: Design.rowTitleSize
+                font.weight: Font.DemiBold
+                color: Design.foreground
+                Layout.fillWidth: true
+            }
+            Label {
+                text: root.builtin ? "BUILT IN" : "CUSTOM"
+                font.family: Design.fontFamily
+                font.pixelSize: Design.labelSmallSize
+                font.weight: Font.DemiBold
+                color: Design.primary
+            }
         }
-        Row {
+        Label {
+            text: root.builtin ? (root.name === "Default" ? "Camera-reported defaults · Read-only" : "Editable starting point") : "Saved camera configuration"
+            font.family: Design.fontFamily
+            font.pixelSize: Design.supportingSize
+            color: Design.foregroundMuted
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+        }
+        RowLayout {
+            Layout.fillWidth: true
             spacing: Design.spaceCompact
-            Button { text: "Apply"; Accessible.name: "Apply " + root.name; onClicked: root.applyRequested() }
-            Button { text: "Save current"; visible: root.editable; Accessible.name: "Save current values to " + root.name; onClicked: root.saveRequested() }
-            Button { text: "Delete"; visible: !root.builtin; Accessible.name: "Delete " + root.name; onClicked: root.deleteRequested() }
+            Item { Layout.fillWidth: true }
+            CinematicButton { text: "Apply"; primary: true; Accessible.name: "Apply " + root.name; onClicked: root.applyRequested() }
+            CinematicButton { text: "Save"; visible: root.editable; Accessible.name: "Save current values to " + root.name; onClicked: root.saveRequested() }
+            CinematicButton { text: "Delete"; destructive: true; visible: !root.builtin; Accessible.name: "Delete " + root.name; onClicked: root.deleteRequested() }
         }
     }
 }

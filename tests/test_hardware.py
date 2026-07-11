@@ -31,7 +31,11 @@ class HardwareIntegrationTests(unittest.TestCase):
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtMultimedia import QMediaDevices, QVideoFrameFormat
 
-        from application_view_model import find_preview_device, select_preview_format
+        from application_view_model import (
+            available_preview_formats,
+            find_preview_device,
+            select_preview_format,
+        )
 
         _app = QGuiApplication.instance() or QGuiApplication([])
         device = find_preview_device(QMediaDevices.videoInputs(), DEVICE)
@@ -39,10 +43,19 @@ class HardwareIntegrationTests(unittest.TestCase):
         self.assertIn("MX Brio", device.description())
         camera_format = select_preview_format(device.videoFormats())
         self.assertIsNotNone(camera_format)
-        self.assertEqual((1280, 720), camera_format.resolution().toTuple())
+        self.assertEqual((1920, 1080), camera_format.resolution().toTuple())
+        self.assertGreaterEqual(camera_format.maxFrameRate(), 59)
         self.assertEqual(
             QVideoFrameFormat.PixelFormat.Format_Jpeg,
             camera_format.pixelFormat(),
+        )
+        modes = available_preview_formats(device.videoFormats())
+        self.assertTrue(
+            any(
+                item.resolution().toTuple() == (3840, 2160) and item.maxFrameRate() >= 29
+                for item in modes
+            ),
+            "MX Brio 4K30 mode is not exposed by Qt Multimedia",
         )
 
     def test_writable_controls_verify_same_value_round_trip(self):

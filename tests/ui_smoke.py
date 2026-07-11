@@ -140,6 +140,9 @@ keyboard_focus_received = False
 keyboard_tab_advanced = False
 keyboard_focus_before = None
 menu_value_synchronized = False
+preview_pointer = None
+preview_survived_resize = False
+breakpoint_switched = False
 
 
 def accessible_name(root, object_name):
@@ -159,20 +162,27 @@ def accessible_name(root, object_name):
     return ""
 
 
-def visual_item(root, object_name):
+def visual_items(root, object_name):
+    matches = []
     stack = [wrapInstance(getCppPointer(root)[0], QQuickWindow).contentItem()]
     while stack:
         item = stack.pop()
         if item.objectName() == object_name:
-            return item
+            matches.append(item)
         stack.extend(item.childItems())
-    return None
+    return matches
+
+
+def visual_item(root, object_name):
+    matches = visual_items(root, object_name)
+    return matches[0] if matches else None
 
 
 def verify_window():
     global accessibility_stage, accessibility_stage_attempt, attempts
     global keyboard_focus_received, keyboard_tab_advanced, keyboard_focus_before
-    global menu_value_synchronized
+    global menu_value_synchronized, preview_pointer, preview_survived_resize
+    global breakpoint_switched
     attempts += 1
     root = engine.rootObjects()[0]
     ready = not model.busy and model.hasCamera
@@ -261,6 +271,37 @@ def verify_window():
     if accessibility_stage == 3:
         if attempts - accessibility_stage_attempt < 3:
             return
+        preview = visual_item(root, "previewOutput")
+        preview_pointer = getCppPointer(preview)[0] if preview is not None else None
+        root.setWidth(900 if requested_width >= 1024 else 1180)
+        accessibility_stage = 31
+        accessibility_stage_attempt = attempts
+        return
+    if accessibility_stage == 31:
+        if attempts - accessibility_stage_attempt < 3:
+            return
+        preview = visual_item(root, "previewOutput")
+        breakpoint_switched = (
+            stacked_layout.property("visible") and not wide_layout.property("visible")
+            if requested_width >= 1024
+            else wide_layout.property("visible") and not stacked_layout.property("visible")
+        )
+        preview_survived_resize = (
+            preview is not None and getCppPointer(preview)[0] == preview_pointer
+        )
+        root.setWidth(requested_width)
+        accessibility_stage = 32
+        accessibility_stage_attempt = attempts
+        return
+    if accessibility_stage == 32:
+        if attempts - accessibility_stage_attempt < 3:
+            return
+        preview = visual_item(root, "previewOutput")
+        preview_survived_resize = (
+            preview_survived_resize
+            and preview is not None
+            and getCppPointer(preview)[0] == preview_pointer
+        )
         accessibility_stage = 4
 
     accessible_names = []
@@ -272,9 +313,10 @@ def verify_window():
         accessible_names.append(accessible_name(root, object_name))
     responsive = (
         wide_layout.property("visible") and not stacked_layout.property("visible")
-        if requested_width >= 940
+        if requested_width >= 1024
         else stacked_layout.property("visible") and not wide_layout.property("visible")
     )
+    preview_output_count = len(visual_items(root, "previewOutput"))
     expected_high_contrast = os.environ.get("LOGIOKI_HIGH_CONTRAST", "").casefold() in {
         "1",
         "true",
@@ -290,7 +332,7 @@ def verify_window():
         and root.property("reducedMotionMode") == expected_reduced_motion
         and root.property("effectiveTransitionDuration") == (0 if expected_reduced_motion else 160)
         and root.property("effectivePlatformProfile") == model.platformProfile
-        and (not requested_scheme or root.property("darkMode") == (requested_scheme == "dark"))
+        and root.property("darkMode")
     )
     verified = (
         ready
@@ -300,6 +342,9 @@ def verify_window():
         and keyboard_focus_received
         and keyboard_tab_advanced
         and menu_value_synchronized
+        and breakpoint_switched
+        and preview_survived_resize
+        and preview_output_count == 1
         and not startup_writes
         and accessible_names
         == [
@@ -382,6 +427,9 @@ def verify_window():
                 "keyboard_focus_received": keyboard_focus_received,
                 "keyboard_tab_advanced": keyboard_tab_advanced,
                 "menu_value_synchronized": menu_value_synchronized,
+                "breakpoint_switched": breakpoint_switched,
+                "preview_survived_resize": preview_survived_resize,
+                "preview_output_count": preview_output_count,
                 "menu_state": (
                     {
                         "currentIndex": visual_item(root, "control-3").property("currentIndex"),

@@ -241,7 +241,7 @@ class ApplicationViewModelTests(unittest.TestCase):
         self.assertEqual("default", model._entry["selected_preset"])
         model.shutdown()
 
-    def test_preview_format_prefers_720p_near_30_fps(self):
+    def test_preview_format_prefers_smooth_full_hd_and_retains_4k(self):
         def camera_format(width, height, fps, pixel_format=None):
             return SimpleNamespace(
                 resolution=lambda: QSize(width, height),
@@ -250,11 +250,21 @@ class ApplicationViewModelTests(unittest.TestCase):
             )
 
         selected = view_model.select_preview_format(
-            [camera_format(1280, 720, 60), camera_format(1280, 720, 30)]
+            [
+                camera_format(1280, 720, 60),
+                camera_format(1920, 1080, 60),
+                camera_format(3840, 2160, 30),
+            ]
         )
-        self.assertEqual(30, selected.maxFrameRate())
+        self.assertEqual((1920, 1080), selected.resolution().toTuple())
+        self.assertEqual(60, selected.maxFrameRate())
 
-    def test_preview_format_prefers_compressed_720p_when_frame_ranges_tie(self):
+        modes = view_model.available_preview_formats(
+            [camera_format(1920, 1080, 60), camera_format(3840, 2160, 30)]
+        )
+        self.assertEqual([(3840, 2160), (1920, 1080)], [m.resolution().toTuple() for m in modes])
+
+    def test_preview_format_prefers_compressed_mode_when_frame_ranges_tie(self):
         def camera_format(pixel_format):
             return SimpleNamespace(
                 resolution=lambda: QSize(1280, 720),
@@ -266,6 +276,10 @@ class ApplicationViewModelTests(unittest.TestCase):
         jpeg = camera_format(view_model.QVideoFrameFormat.PixelFormat.Format_Jpeg)
 
         self.assertIs(jpeg, view_model.select_preview_format([yuyv, jpeg]))
+        self.assertEqual(
+            "1280×720 · 60 fps · MJPEG",
+            view_model.preview_format_label(jpeg),
+        )
 
     def test_preview_device_matching_is_exact(self):
         partial = SimpleNamespace(id=lambda: b"platform:/dev/video0:stream")

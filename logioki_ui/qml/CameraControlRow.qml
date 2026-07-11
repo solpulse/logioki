@@ -24,6 +24,13 @@ Item {
     implicitHeight: content.implicitHeight + Design.spaceCompact * 2
     opacity: available ? 1 : .58
     Behavior on opacity { NumberAnimation { duration: Design.transition } }
+    Rectangle {
+        anchors.fill: parent
+        radius: Design.radius
+        color: Design.surfaceContainer
+        border.width: 1
+        border.color: Design.outlineVariant
+    }
 
     ColumnLayout {
         id: content
@@ -36,43 +43,75 @@ Item {
             visible: root.showGroup
             font.pixelSize: Design.sectionSize
             font.weight: Font.DemiBold
-            color: Design.text
+            color: Design.primary
             Layout.topMargin: root.showGroup ? Design.spaceCompact : 0
         }
 
-        RowLayout {
-            id: row
+        Item {
+            id: titleRow
             Layout.fillWidth: true
-            Layout.minimumHeight: Design.rowHeight
-            spacing: Design.space
+            implicitHeight: Math.max(titleColumn.implicitHeight, root.kind === "toggle" ? 32 : 0)
 
             ColumnLayout {
+                id: titleColumn
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.right: toggleLoader.visible ? toggleLoader.left : parent.right
+                anchors.rightMargin: toggleLoader.visible ? Design.controlInnerGap : 0
                 Layout.fillWidth: true
-                Layout.minimumWidth: 100
+                Layout.minimumWidth: 0
                 spacing: 2
-                Label { id: titleLabel; text: root.name; font.pixelSize: Design.rowTitleSize; font.weight: Font.Medium; color: Design.text; wrapMode: Text.Wrap }
-                Label { visible: !root.available; text: root.reason; font.pixelSize: Design.supportingSize; color: Design.mutedText; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                Label { id: titleLabel; text: root.name; font.family: Design.fontFamily; font.pixelSize: Design.rowTitleSize; font.weight: Font.DemiBold; color: Design.foreground; wrapMode: Text.Wrap }
+                Label { visible: !root.available; text: root.reason; font.family: Design.fontFamily; font.pixelSize: Design.supportingSize; color: Design.foregroundMuted; wrapMode: Text.Wrap; Layout.fillWidth: true }
             }
 
             Loader {
-                Layout.preferredWidth: Math.min(300, root.width * .55)
-                Layout.minimumWidth: Math.min(180, root.width * .42)
-                Layout.alignment: Qt.AlignVCenter
-                sourceComponent: root.kind === "toggle" ? toggleEditor : root.kind === "menu" ? menuEditor : numberEditor
+                id: toggleLoader
+                visible: root.kind === "toggle" && root.available
+                width: 42
+                height: 24
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                sourceComponent: toggleEditor
             }
+        }
+
+        Loader {
+            visible: root.kind !== "toggle" && root.available
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? 36 : 0
+            sourceComponent: root.kind === "menu" ? menuEditor : numberEditor
         }
     }
 
     Component {
         id: toggleEditor
-        Switch {
+        AbstractButton {
+            id: toggle
             objectName: "control-" + root.controlId
-            anchors.right: parent.right
+            width: 42
+            height: 24
+            padding: 0
+            checkable: true
             checked: root.value !== 0
             enabled: root.available
             Accessible.name: root.name
             Accessible.labelledBy: titleLabel
             onClicked: root.edited(root.controlId, checked ? 1 : 0, true)
+            contentItem: Item {}
+            background: Rectangle {
+                anchors.fill: parent
+                radius: 12
+                color: toggle.checked ? Design.primary : Design.surfaceContainerHighest
+                border.width: toggle.activeFocus ? Design.focusWidth : 1
+                border.color: toggle.activeFocus ? Design.primary : Design.outlineVariant
+                Rectangle {
+                    width: 18; height: 18; radius: 9; y: 3
+                    x: toggle.checked ? parent.width - width - 3 : 3
+                    color: toggle.checked ? Design.primaryForeground : Design.foreground
+                    Behavior on x { NumberAnimation { duration: Design.transition } }
+                }
+            }
         }
     }
 
@@ -96,6 +135,9 @@ Item {
             Accessible.labelledBy: titleLabel
             currentIndex: indexForHardwareValue(root.value)
             onActivated: root.edited(root.controlId, hardwareValue, true)
+            font.family: Design.fontFamily
+            font.pixelSize: Design.bodySize
+            background: Rectangle { radius: Design.radius; color: Design.surfaceContainerLowest; border.width: parent.activeFocus ? Design.focusWidth : 1; border.color: parent.activeFocus ? Design.primary : Design.outlineVariant }
         }
     }
 
@@ -104,6 +146,7 @@ Item {
         RowLayout {
             width: parent.width
             Slider {
+                id: slider
                 objectName: "control-" + root.controlId
                 Layout.fillWidth: true
                 from: root.minimum
@@ -115,6 +158,23 @@ Item {
                 Accessible.labelledBy: titleLabel
                 onMoved: root.edited(root.controlId, Math.round(value), false)
                 onPressedChanged: if (!pressed) root.edited(root.controlId, Math.round(value), true)
+                background: Rectangle {
+                    x: slider.leftPadding
+                    y: slider.topPadding + slider.availableHeight / 2 - height / 2
+                    width: slider.availableWidth
+                    height: 4
+                    radius: 2
+                    color: Design.surfaceContainerHighest
+                    Rectangle { width: slider.visualPosition * parent.width; height: parent.height; radius: parent.radius; color: Design.primary }
+                }
+                handle: Rectangle {
+                    x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
+                    y: slider.topPadding + slider.availableHeight / 2 - height / 2
+                    implicitWidth: 14; implicitHeight: 14; radius: 7
+                    color: Design.foreground
+                    border.width: parent.activeFocus ? Design.focusWidth : 1
+                    border.color: parent.activeFocus ? Design.primary : Design.outline
+                }
             }
             SpinBox {
                 objectName: "control-exact-" + root.controlId
@@ -124,9 +184,13 @@ Item {
                 value: root.value
                 enabled: root.available
                 editable: true
+                Layout.preferredWidth: 76
                 Accessible.name: root.name + " exact value"
                 Accessible.labelledBy: titleLabel
                 onValueModified: root.edited(root.controlId, value, true)
+                font.family: Design.monoFamily
+                font.pixelSize: Design.monoSize
+                background: Rectangle { radius: Design.radius; color: Design.surfaceContainerLowest; border.width: parent.activeFocus ? Design.focusWidth : 1; border.color: parent.activeFocus ? Design.primary : Design.outlineVariant }
             }
         }
     }

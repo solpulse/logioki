@@ -98,25 +98,59 @@ def camera_labels(cameras) -> list[str]:
     ]
 
 
+def _is_compressed_preview_format(camera_format) -> bool:
+    return (
+        getattr(camera_format, "pixelFormat", lambda: None)()
+        == QVideoFrameFormat.PixelFormat.Format_Jpeg
+    )
+
+
+def available_preview_formats(formats):
+    """Return one efficient format for each resolution/frame-rate mode."""
+    modes = {}
+    for camera_format in formats:
+        size = camera_format.resolution()
+        key = (size.width(), size.height(), round(float(camera_format.maxFrameRate()), 2))
+        current = modes.get(key)
+        if current is None or (
+            _is_compressed_preview_format(camera_format)
+            and not _is_compressed_preview_format(current)
+        ):
+            modes[key] = camera_format
+    return sorted(
+        modes.values(),
+        key=lambda camera_format: (
+            camera_format.resolution().width() * camera_format.resolution().height(),
+            float(camera_format.maxFrameRate()),
+        ),
+        reverse=True,
+    )
+
+
+def preview_format_label(camera_format) -> str:
+    size = camera_format.resolution()
+    codec = "MJPEG" if _is_compressed_preview_format(camera_format) else "Native"
+    return f"{size.width()}×{size.height()} · {camera_format.maxFrameRate():g} fps · {codec}"
+
+
 def select_preview_format(formats):
-    """Prefer 720p/30, then the closest bounded native format."""
+    """Prefer smooth 1080p60, while retaining higher modes for selection."""
     if not formats:
         return None
 
     def rank(camera_format):
         size = camera_format.resolution()
         fps = float(camera_format.maxFrameRate())
-        exact = size.width() == 1280 and size.height() == 720
-        fps_distance = abs(min(fps, 60.0) - 30.0)
-        pixel_distance = abs(size.width() * size.height() - 1280 * 720)
-        bounded = size.width() <= 1920 and size.height() <= 1080
-        compressed = (
-            getattr(camera_format, "pixelFormat", lambda: None)()
-            == QVideoFrameFormat.PixelFormat.Format_Jpeg
+        smooth_full_hd = size.width() == 1920 and size.height() == 1080 and 59.0 <= fps <= 61.0
+        return (
+            smooth_full_hd,
+            _is_compressed_preview_format(camera_format),
+            size.width() * size.height() * min(fps, 60.0),
+            size.width() * size.height(),
+            fps,
         )
-        return (exact, bounded, -fps_distance, compressed, -pixel_distance)
 
-    return max(formats, key=rank)
+    return max(available_preview_formats(formats), key=rank)
 
 
 def find_preview_device(devices, path: str):
@@ -132,6 +166,7 @@ def writable_values(camera, live_values: dict[str, int]) -> dict[str, int]:
 
 class PreviewController(QObject):
     stateChanged = Signal()
+    modesChanged = Signal()
     errorReported = Signal(str)
 
     def __init__(self, parent=None):
@@ -142,6 +177,9 @@ class PreviewController(QObject):
         self._format = "No active preview"
         self._generation = 0
         self._visible = True
+        self._formats = []
+        self._format_options = []
+        self._current_format_index = -1
 
     @Property(QObject, constant=True)
     def captureSession(self):
@@ -159,6 +197,14 @@ class PreviewController(QObject):
     def format(self):
         return self._format
 
+    @Property("QStringList", notify=modesChanged)
+    def formatOptions(self):
+        return self._format_options
+
+    @Property(int, notify=modesChanged)
+    def currentFormatIndex(self):
+        return self._current_format_index
+
     def start(self, path: str) -> None:
         self.stop()
         self._generation += 1
@@ -169,11 +215,14 @@ class PreviewController(QObject):
             return
         camera = QCamera(device, self)
         camera.errorOccurred.connect(lambda _error, message, g=generation: self._error(g, message))
-        camera_format = select_preview_format(device.videoFormats())
+        self._formats = available_preview_formats(device.videoFormats())
+        self._format_options = [preview_format_label(item) for item in self._formats]
+        camera_format = select_preview_format(self._formats)
         if camera_format is not None:
             camera.setCameraFormat(camera_format)
-            size = camera_format.resolution()
-            self._format = f"{size.width()}×{size.height()} · {camera_format.maxFrameRate():g} fps"
+            self._current_format_index = self._formats.index(camera_format)
+            self._format = preview_format_label(camera_format)
+        self.modesChanged.emit()
         self._camera = camera
         self._session.setCamera(camera)
         if self._visible:
@@ -194,7 +243,27 @@ class PreviewController(QObject):
         if camera is not None:
             camera.stop()
             camera.deleteLater()
+        self._formats = []
+        self._format_options = []
+        self._current_format_index = -1
+        self.modesChanged.emit()
         self._set_state("Preview unavailable", "No active preview")
+
+    @Slot(int)
+    def selectFormat(self, index: int) -> None:
+        if self._camera is None or not 0 <= index < len(self._formats):
+            return
+        if index == self._current_format_index:
+            return
+        camera_format = self._formats[index]
+        self._camera.stop()
+        self._camera.setCameraFormat(camera_format)
+        self._current_format_index = index
+        self._format = preview_format_label(camera_format)
+        if self._visible:
+            self._camera.start()
+        self.modesChanged.emit()
+        self._set_state("Connected", self._format)
 
     @Slot(bool)
     def setVisible(self, visible: bool) -> None:
